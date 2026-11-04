@@ -1,0 +1,8 @@
+[server]
+headless = true
+maxUploadSize = 15
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+gatherUsageStats = false

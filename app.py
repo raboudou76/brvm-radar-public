@@ -7,6 +7,7 @@ import streamlit as st
 from bs4 import BeautifulSoup
 from finance_engine import extract_pdf, tables_excel, ratios, dcf_fcfe, dividend_discount, residual_income
 from auto_financials import discover, download_pdf, candidates_from_tables
+from structured_financials import extract_structured
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -206,7 +207,7 @@ elif menu=='Analyse fondamentale':
                     with st.spinner('Téléchargement et lecture du rapport…'):
                         raw=download_pdf(pdfs[chosen]['URL'])
                         overview,tables=extract_pdf(raw)
-                        st.session_state['auto_tables']={'source':pdfs[chosen]['URL'],'overview':overview,'tables':tables,'candidates':candidates_from_tables(tables)}
+                        st.session_state['auto_tables']={'source':pdfs[chosen]['URL'],'overview':overview,'tables':tables,'candidates':candidates_from_tables(tables),'structured':extract_structured(raw)}
                     st.success('Lecture terminée : consultez les résultats ci-dessous.')
                 except Exception as exc: st.error(f'Extraction impossible : {exc}')
         else:
@@ -215,6 +216,21 @@ elif menu=='Analyse fondamentale':
     if extracted:
         st.caption('Document source : '+extracted['source'])
         st.metric('Tableaux candidats',len(extracted['tables']))
+        detailed, indicators, checks = extracted.get('structured',(pd.DataFrame(),pd.DataFrame(),pd.DataFrame()))
+        if not indicators.empty:
+            st.markdown('### États financiers structurés — extraction expérimentale')
+            st.caption('Montants et années détectés depuis la position des textes dans le PDF. Les chiffres ne sont pas certifiés.')
+            st.dataframe(indicators,hide_index=True,use_container_width=True)
+            st.download_button('📥 Télécharger les indicateurs (CSV)',indicators.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_indicateurs_extraits.csv','text/csv',key='structured_csv')
+            if not checks.empty:
+                st.markdown('#### Contrôles de cohérence')
+                st.dataframe(checks,hide_index=True,use_container_width=True)
+            if not detailed.empty:
+                with st.expander('Voir les lignes financières détectées et leurs pages'):
+                    st.dataframe(detailed,hide_index=True,use_container_width=True)
+            st.info('Extraction expérimentale adaptée aux états de synthèse en colonnes côte à côte. Vérifiez chaque montant avec le PDF avant tout calcul de valorisation.')
+        else:
+            st.warning('Le format de ce rapport ne correspond pas encore à un modèle de tableau structuré reconnu. Aucun chiffre ne sera inventé.')
         st.dataframe(extracted['overview'],hide_index=True,use_container_width=True)
         candidates=extracted['candidates']
         if candidates.empty:

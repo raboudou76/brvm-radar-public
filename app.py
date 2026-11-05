@@ -6,6 +6,7 @@ import requests
 import streamlit as st
 from bs4 import BeautifulSoup
 from finance_engine import extract_pdf, tables_excel, ratios, dcf_fcfe, dividend_discount, residual_income
+from auto_financials import discover, download_pdf, candidates_from_tables
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -109,7 +110,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V1.2')
+st.sidebar.caption('Investment Intelligence · V1.3')
 menu=st.sidebar.radio('Navigation',['Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -182,35 +183,53 @@ elif menu=='Analyser un PDF':
         except Exception as exc: st.error(f'Extraction impossible : {exc}')
 
 elif menu=='Analyse fondamentale':
-    st.subheader('Analyse fondamentale — saisie financière vérifiée')
-    st.caption('Saisissez les montants issus des états financiers contrôlés. Aucune donnée fondamentale n’est inventée ni automatiquement associée à une société.')
-    ticker=st.text_input('Société / symbole étudié',value='SMB')
-    period=st.text_input('Période et source du rapport',placeholder='Ex. 2025 annuel — BRVM, rapport daté du ...')
-    unit=st.selectbox('Unité des montants',['FCFA','milliers FCFA','millions FCFA'])
-    sector=st.selectbox('Secteur',['Industrie / services','Banque','Assurance','Autre'])
-    with st.form('fundamentals'):
-        c1,c2=st.columns(2)
-        with c1:
-            ca=st.number_input('Chiffre d’affaires / produit net bancaire',value=0.0,format='%.2f')
-            net=st.number_input('Résultat net',value=0.0,format='%.2f')
-            equity=st.number_input('Capitaux propres',value=0.0,format='%.2f')
-        with c2:
-            debt=st.number_input('Dette financière',value=0.0,format='%.2f')
-            cfo=st.number_input('Flux opérationnel',value=0.0,format='%.2f')
-            capex=st.number_input('Investissements (décaissements positifs)',value=0.0,format='%.2f')
-            delta_debt=st.number_input('Variation nette de dette (+ si nouvel emprunt)',value=0.0,format='%.2f')
-        submitted=st.form_submit_button('Calculer les indicateurs',type='primary')
-    if submitted:
-        if not period.strip(): st.warning('Renseignez la période et la source pour assurer la traçabilité.')
-        vals={'chiffre_affaires':ca if ca!=0 else None,'resultat_net':net,'capitaux_propres':equity if equity!=0 else None,'dette_financiere':debt,'flux_operationnel':cfo,'investissements':capex,'variation_dette':delta_debt}
-        rr=ratios(vals)
-        def fmt_pct(x):return f'{x*100:.2f} %' if x is not None else 'Non calculable'
-        st.metric('Marge nette',fmt_pct(rr['Marge nette']))
-        st.metric('ROE',fmt_pct(rr['ROE']))
-        st.metric('Dette / fonds propres',fmt_pct(rr['Dette / capitaux propres']))
-        st.metric('FCFE indicatif',f"{rr['FCFE (proxy)']:,.2f} {unit}" if rr['FCFE (proxy)'] is not None else 'Non calculable')
-        if sector=='Banque': st.warning('Les flux de trésorerie et la dette ne s’interprètent pas comme pour une société industrielle. Privilégiez le ROE, le P/B et le résultat résiduel.')
-        st.download_button('Exporter les indicateurs CSV',pd.DataFrame([{'Titre':ticker,'Période / source':period,'Unité':unit,'Secteur':sector,**rr}]).to_csv(index=False,sep=';').encode('utf-8-sig'),'analyse_fondamentale.csv','text/csv')
+    st.subheader('Analyse fondamentale — collecte assistée depuis la BRVM')
+    st.caption('Sélectionnez une société : aucun chiffre à saisir pour rechercher les publications. Les chiffres extraits restent soumis à vérification des unités et des périodes.')
+    ticker=st.text_input('Symbole ou nom présent dans le titre des publications',value='SMB')
+    pages=st.slider('Pages de publications à parcourir',1,8,4)
+    if st.button('🔎 Rechercher les rapports officiels',type='primary'):
+        try:
+            with st.spinner('Recherche sur les pages publiques BRVM…'):
+                st.session_state['auto_results']=discover(ticker,pages=pages)
+                st.session_state.pop('auto_tables',None)
+            st.success(f"{len(st.session_state['auto_results'])} liens candidats détectés. Ce n'est pas une garantie d'exhaustivité.")
+        except Exception as exc:
+            st.error(f'Recherche impossible : {exc}')
+    results=st.session_state.get('auto_results',[])
+    if results:
+        st.dataframe(pd.DataFrame(results),hide_index=True,use_container_width=True,column_config={'URL':st.column_config.LinkColumn('Ouvrir la publication'),'Page source':st.column_config.LinkColumn('Source')})
+        pdfs=[x for x in results if x['PDF']]
+        if pdfs:
+            chosen=st.selectbox('Choisir un PDF officiel à examiner',range(len(pdfs)),format_func=lambda i:pdfs[i]['Titre'][:110]+' · '+pdfs[i]['URL'].split('/')[-1][:45])
+            if st.button('📥 Lire et extraire les tableaux du PDF sélectionné'):
+                try:
+                    with st.spinner('Téléchargement et lecture du rapport…'):
+                        raw=download_pdf(pdfs[chosen]['URL'])
+                        overview,tables=extract_pdf(raw)
+                        st.session_state['auto_tables']={'source':pdfs[chosen]['URL'],'overview':overview,'tables':tables,'candidates':candidates_from_tables(tables)}
+                    st.success('Lecture terminée : consultez les résultats ci-dessous.')
+                except Exception as exc: st.error(f'Extraction impossible : {exc}')
+        else:
+            st.info('Aucun PDF direct détecté. Ouvrez la publication officielle ; certains téléchargements sont générés dynamiquement.')
+    extracted=st.session_state.get('auto_tables')
+    if extracted:
+        st.caption('Document source : '+extracted['source'])
+        st.metric('Tableaux candidats',len(extracted['tables']))
+        st.dataframe(extracted['overview'],hide_index=True,use_container_width=True)
+        candidates=extracted['candidates']
+        if candidates.empty:
+            st.warning('Aucune ligne financière reconnue avec une certitude suffisante. Consultez les tableaux bruts ou essayez un autre rapport. Aucun ratio automatique ne sera affiché.')
+        else:
+            st.markdown('#### Montants détectés — non certifiés')
+            st.dataframe(candidates,hide_index=True,use_container_width=True)
+            st.download_button('Exporter les montants candidats CSV',candidates.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_montants_a_verifier.csv','text/csv')
+        if extracted['tables']:
+            st.download_button('Exporter les tableaux du PDF (Excel)',tables_excel(extracted['tables']),'brvm_tableaux_a_verifier.xlsx','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            for i,item in enumerate(extracted['tables'][:15]):
+                with st.expander(f"Page {item['page']} · Tableau {i+1} · {item['method']}"):
+                    st.dataframe(item['data'],hide_index=True,use_container_width=True)
+        st.warning('Ratios et valeur intrinsèque suspendus : il faut confirmer les périodes, les unités, les colonnes, le nombre d’actions et les postes financiers. Aucune donnée manquante n’est remplacée par zéro.')
+    st.link_button('Voir toutes les publications officielles', 'https://www.brvm.org/fr/type-document/etats-financiers?page=1')
 
 elif menu=='Valeur intrinsèque':
     st.subheader('Valorisation intrinsèque — modèles transparents')

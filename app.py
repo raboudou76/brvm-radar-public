@@ -47,18 +47,46 @@ def load_market():
     df=df.drop_duplicates('Symbole').reset_index(drop=True)
     return df,updated
 
-@st.cache_data(ttl=1800,show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def publications():
-    r=requests.get(FIN,headers=HEADERS,timeout=25);r.raise_for_status()
-    soup=BeautifulSoup(r.text,'html.parser')
-    result=[]
-    for a in soup.find_all('a',href=True):
-        label=' '.join(a.get_text(' ',strip=True).split())
-        if 'etats financiers' in label.lower() or 'états financiers' in label.lower():
-            link=urljoin(FIN,a['href'])
-            if link!=FIN and '/fr/' in link:
-                result.append({'Publication':label,'Lien':link})
-    return pd.DataFrame(result).drop_duplicates() if result else pd.DataFrame(columns=['Publication','Lien'])
+    """Inventaire indicatif des liens publiés sur la rubrique officielle.
+
+    Les sites tiers, les PDF indirects et les pages chargées uniquement en JS
+    ne sont pas couverts par cette extraction HTML.
+    """
+    r = requests.get(FIN, headers=HEADERS, timeout=25)
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, 'html.parser')
+    result = []
+    seen = set()
+    for a in soup.select('a[href]'):
+        href = a.get('href', '').strip()
+        if not href or href.startswith(('#', 'javascript:', 'mailto:')):
+            continue
+        link = urljoin(FIN, href)
+        if not link.startswith(('https://www.brvm.org/', 'http://www.brvm.org/')):
+            continue
+        label = ' '.join(a.get_text(' ', strip=True).split())
+        context = ' '.join(a.parent.get_text(' ', strip=True).split())[:350] if a.parent else label
+        blob = (label + ' ' + context + ' ' + link).lower()
+        is_pdf = bool(re.search(r'\.pdf(?:[?#]|$)', link, re.I))
+        is_financial = any(word in blob for word in (
+            'financier', 'financière', 'bilan', 'rapport', 'résultat',
+            'trimestriel', 'semestriel', 'annuel', 'activité', 'activite',
+            'publication', 'document', 'attestation'
+        ))
+        if not (is_pdf or is_financial):
+            continue
+        if link in seen or link.rstrip('/') == FIN.rstrip('/'):
+            continue
+        seen.add(link)
+        result.append({
+            'Publication': label or context[:120] or 'Document sans titre',
+            'Contexte': context,
+            'Type': 'PDF direct' if is_pdf else 'Page / lien',
+            'Lien': link,
+        })
+    return pd.DataFrame(result, columns=['Publication', 'Contexte', 'Type', 'Lien'])
 
 def score_session(df):
     # This is a partial signal, NOT the historic 100-point score.
@@ -110,31 +138,84 @@ elif menu=='Fiche action':
     st.info('Valorisation intrinsèque, états financiers historiques et score Opportunity : en attente de données vérifiées pour ce titre.')
 
 elif menu=='Publications financières':
-    st.subheader('Publications de la BRVM')
-    if st.button('Actualiser les publications'):publications.clear()
+    st.subheader('Publications financières BRVM')
+    st.caption('Inventaire indicatif des liens accessibles dans le HTML de la rubrique BRVM ; couverture non exhaustive.')
+    if st.button('Actualiser les publications'):
+        publications.clear()
     try:
-        pubs=publications();st.dataframe(pubs,use_container_width=True,hide_index=True)
-        st.download_button('Exporter inventaire CSV',pubs.to_csv(index=False).encode('utf-8-sig'),'brvm_publications.csv','text/csv')
-    except Exception as exc:st.error(f'Erreur de récupération : {exc}')
-    st.link_button('Consulter la rubrique officielle',FIN)
+        pubs = publications()
+        q = st.text_input('Rechercher société, symbole ou rapport (ex. SMB, SMBC, T3)')
+        if q:
+            match = pubs[['Publication', 'Contexte', 'Lien']].fillna('').apply(
+                lambda col: col.str.contains(q, case=False, regex=False)
+            ).any(axis=1)
+            pubs = pubs.loc[match]
+        st.caption(f'{len(pubs)} lien(s) correspondant(s) dans la page consultée')
+        if pubs.empty:
+            st.warning('Aucun document trouvé dans cet inventaire. Cela ne signifie pas que le rapport est inexistant.')
+        else:
+            st.dataframe(pubs[['Publication', 'Type', 'Lien']],
+                         column_config={'Lien': st.column_config.LinkColumn('Ouvrir le document / la page')},
+                         use_container_width=True, hide_index=True)
+            st.download_button('📥 Exporter l’inventaire CSV',
+                               pubs.to_csv(index=False, sep=';').encode('utf-8-sig'),
+                               'brvm_publications.csv', 'text/csv')
+        st.info('Un lien de type « Page / lien » ne garantit pas un téléchargement PDF direct. Vérifier le document sur la source.')
+    except Exception as exc:
+        st.error(f'Erreur de récupération : {exc}')
+    st.link_button('Consulter la rubrique officielle', FIN)
 
 elif menu=='Analyser un PDF':
-    st.subheader('Prélecture des états financiers')
-    uploaded=st.file_uploader('Importer un rapport financier PDF',type=['pdf'])
+    st.subheader('Prélecture et extraction expérimentale des tableaux PDF')
+    uploaded = st.file_uploader('Importer un rapport financier PDF', type=['pdf'])
     if uploaded:
         if uploaded.size > 15 * 1024 * 1024:
             st.error('PDF trop volumineux : limite de 15 Mo pour la bêta publique.')
             st.stop()
         try:
             import fitz
-            doc=fitz.open(stream=uploaded.read(),filetype='pdf')
-            rows=[]
-            for i,page in enumerate(doc):
-                txt=page.get_text('text'); low=txt.lower()
-                rows.append({'Page':i+1,'Bilan':('bilan' in low or 'total actif' in low),'Compte de résultat':('compte de résultat' in low or 'compte de resultat' in low),'Flux de trésorerie':('flux de trésorerie' in low or 'flux de tresorerie' in low),'Caractères':len(txt)})
-            st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
-            st.info('Détection documentaire uniquement. Les tableaux chiffrés ne sont pas encore certifiés ni enregistrés dans une base financière.')
-        except Exception as exc:st.error(f'Impossible de lire le PDF : {exc}')
+            doc = fitz.open(stream=uploaded.getvalue(), filetype='pdf')
+            rows, extracted = [], []
+            for i, page in enumerate(doc):
+                txt = page.get_text('text')
+                low = txt.lower()
+                rows.append({
+                    'Page': i + 1,
+                    'Bilan': ('bilan' in low or 'total actif' in low),
+                    'Compte de résultat': ('compte de résultat' in low or 'compte de resultat' in low),
+                    'Flux de trésorerie': ('flux de trésorerie' in low or 'flux de tresorerie' in low),
+                    'Caractères': len(txt),
+                })
+                # PyMuPDF reconnaît certaines grilles textuelles ; pas les scans sans OCR.
+                try:
+                    tables = page.find_tables()
+                    for j, table in enumerate(tables.tables, start=1):
+                        data = table.extract()
+                        if data and len(data) > 1:
+                            extracted.append((i + 1, j, pd.DataFrame(data)))
+                except (AttributeError, ValueError, RuntimeError):
+                    pass
+            doc.close()
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            st.caption(f'{len(extracted)} tableau(x) candidat(s) détecté(s), sans certification des chiffres.')
+            if not extracted:
+                st.warning('Aucun tableau structuré reconnu. Le PDF peut être scanné ou utiliser une mise en page non prise en charge.')
+            else:
+                for page_num, table_num, frame in extracted[:30]:
+                    with st.expander(f'Page {page_num} · Tableau {table_num} ({len(frame)} lignes)'):
+                        st.dataframe(frame, hide_index=True, use_container_width=True)
+                        st.download_button(
+                            '📥 Télécharger ce tableau CSV',
+                            frame.to_csv(index=False, header=False, sep=';').encode('utf-8-sig'),
+                            file_name=f'brvm_pdf_page_{page_num}_tableau_{table_num}.csv',
+                            mime='text/csv',
+                            key=f'pdf_{page_num}_{table_num}',
+                        )
+                if len(extracted) > 30:
+                    st.info('Seuls les 30 premiers tableaux sont affichés.')
+            st.warning('Extraction expérimentale : contrôler les années, unités, colonnes et montants sur le PDF original avant toute valorisation.')
+        except Exception as exc:
+            st.error(f'Impossible de lire le PDF : {exc}')
 
 elif menu=='Portefeuille':
     st.subheader('Simulateur de portefeuille (session locale)')
@@ -151,6 +232,13 @@ elif menu=='Portefeuille':
         p['Coût']=p['Quantité']*p['Prix de revient'];p['Valeur']=p['Quantité']*p['Clôture'];p['P/L']=p['Valeur']-p['Coût']
         st.dataframe(p,hide_index=True,use_container_width=True)
         st.metric('Plus-value / moins-value latente hors frais',f"{p['P/L'].sum():,.0f} FCFA")
+        st.download_button(
+            '📥 Exporter le portefeuille CSV',
+            data=p.to_csv(index=False, sep=';').encode('utf-8-sig'),
+            file_name='BRVM_RADAR_Portefeuille.csv',
+            mime='text/csv',
+            use_container_width=True,
+        )
         if st.button('Effacer le portefeuille'):st.session_state.positions=[];st.rerun()
 
 elif menu=='Informations légales':

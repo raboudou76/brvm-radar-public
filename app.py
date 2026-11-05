@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from finance_engine import extract_pdf, tables_excel, ratios, dcf_fcfe, dividend_discount, residual_income
 from auto_financials import discover, download_pdf, candidates_from_tables
 from structured_financials import extract_structured
+from analysis_engine import fundamental_analysis, valuation_scenarios
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -222,6 +223,22 @@ elif menu=='Analyse fondamentale':
             st.caption('Montants et années détectés depuis la position des textes dans le PDF. Les chiffres ne sont pas certifiés.')
             st.dataframe(indicators,hide_index=True,use_container_width=True)
             st.download_button('📥 Télécharger les indicateurs (CSV)',indicators.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_indicateurs_extraits.csv','text/csv',key='structured_csv')
+            fundamentals, ratios_table, analysis = fundamental_analysis(indicators)
+            if not fundamentals.empty:
+                st.markdown('### Analyse fondamentale calculée automatiquement')
+                st.caption('Données en millions FCFA. Les ratios sont dérivés uniquement des valeurs extraites, avec renvoi à la page source. Vérifiez les chiffres avant toute décision.')
+                st.dataframe(fundamentals,hide_index=True,use_container_width=True)
+                st.download_button('Exporter les états financiers normalisés CSV',fundamentals.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_etats_normalises.csv','text/csv',key='fundamental_export')
+                st.markdown('#### Ratios fondamentaux')
+                st.dataframe(ratios_table,hide_index=True,use_container_width=True)
+                st.download_button('Exporter les ratios CSV',ratios_table.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_ratios.csv','text/csv',key='ratios_export')
+                if analysis['ready']:
+                    st.success('Contrôle du bilan réussi pour les périodes détectées. Cela ne certifie pas tous les postes.')
+                else:
+                    st.error('Contrôle du bilan insuffisant : ratios indicatifs, valorisation suspendue.')
+                _, valuation_message=valuation_scenarios(analysis)
+                st.info('Valorisation automatique : '+valuation_message)
+
             if not checks.empty:
                 st.markdown('#### Contrôles de cohérence')
                 st.dataframe(checks,hide_index=True,use_container_width=True)

@@ -95,3 +95,4 @@ def tables_excel(tables):
         for i,item in enumerate(tables[:80],1):
             item['data'].to_excel(writer,sheet_name=f"P{item['page']}_T{i}"[:31],index=False,header=False)
     return buffer.getvalue()
+

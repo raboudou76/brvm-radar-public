@@ -9,6 +9,7 @@ from finance_engine import extract_pdf, tables_excel, ratios, dcf_fcfe, dividend
 from auto_financials import discover, download_pdf, candidates_from_tables
 from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
+from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -238,6 +239,43 @@ elif menu=='Analyse fondamentale':
                     st.error('Contrôle du bilan insuffisant : ratios indicatifs, valorisation suspendue.')
                 _, valuation_message=valuation_scenarios(analysis)
                 st.info('Valorisation automatique : '+valuation_message)
+                st.markdown('### V1.5 — Scénarios de valorisation FCFE (indicatifs)')
+                st.caption('Pour sociétés non bancaires uniquement. Les flux de financement sont supposés ne contenir que les emprunts nets et dividendes ; vérifier cette hypothèse dans le rapport complet. Les hypothèses ne sont pas des prévisions.')
+                bridge, bridge_error = reconstruct_fcfe(analysis)
+                if bridge_error:
+                    st.warning('Valorisation non disponible : '+bridge_error)
+                else:
+                    st.write('Réconciliation indicative des flux (millions FCFA)')
+                    bridge_rows=[('Flux opérationnels',bridge['operating']),('Flux investissements (signés)',bridge['investing']),('Flux de financement (signés)',bridge['financing']),('Dividendes versés',bridge['dividends']),('Emprunts nets estimés = financement + dividendes',bridge['net_borrowing_proxy']),('FCFE estimé = opérationnels + investissements + emprunts nets',bridge['fcfe_proxy'])]
+                    st.dataframe(pd.DataFrame(bridge_rows,columns=['Poste','Millions FCFA']),hide_index=True,use_container_width=True)
+                    st.warning('Le FCFE estimé repose sur une seule année et une hypothèse de réconciliation. Les variations du BFR peuvent le rendre non représentatif. Aucun résultat n’est une recommandation d’achat.')
+                    confirmed=st.checkbox('Je confirme avoir vérifié le nombre d’actions en circulation et l’absence d’autres flux de capitaux propres significatifs dans le rapport complet.',key='v15_confirm')
+                    shares_text=st.text_input('Nombre d’actions en circulation (obligatoire ; aucune valeur présumée)',value='',key='v15_shares')
+                    quote_v15=st.number_input('Cours BRVM de référence (FCFA/action ; 0 = non renseigné)',min_value=0.0,value=0.0,step=50.0,key='v15_quote')
+                    with st.expander('Hypothèses des trois scénarios — modifiables'):
+                        assumptions={}
+                        for name,params in SCENARIOS.items():
+                            st.markdown('**'+name+'**')
+                            c1,c2,c3=st.columns(3)
+                            with c1: growth=st.number_input('Croissance annuelle 5 ans (%)',value=float(params['growth']*100),step=0.5,key='v15_g_'+name)/100
+                            with c2: discount=st.number_input('Coût des fonds propres (%)',value=float(params['discount']*100),step=0.5,key='v15_d_'+name)/100
+                            with c3: terminal=st.number_input('Croissance terminale (%)',value=float(params['terminal_growth']*100),step=0.5,key='v15_t_'+name)/100
+                            assumptions[name]={'growth':growth,'discount':discount,'terminal_growth':terminal}
+                    if st.button('Calculer les trois scénarios V1.5',key='v15_run'):
+                        if not confirmed:st.error('Confirmation des données de capital et des flux requise.')
+                        else:
+                            try:
+                                shares_v15=int(shares_text.replace(' ','').replace('\u00a0',''))
+                                if shares_v15<=0:raise ValueError('Le nombre d’actions doit être positif.')
+                                table,_,error=run_scenarios(analysis,shares_v15,quote_v15,assumptions)
+                                if error:st.error(error)
+                                else:
+                                    st.session_state['v15_results']=table
+                                    st.session_state['v15_source']=extracted['source']
+                            except (ValueError,OverflowError) as exc:st.error('Nombre d’actions ou hypothèses invalides : '+str(exc))
+                    if st.session_state.get('v15_source')==extracted['source'] and 'v15_results' in st.session_state:
+                        st.dataframe(st.session_state['v15_results'],hide_index=True,use_container_width=True)
+                        st.download_button('Exporter les scénarios V1.5 (CSV)',st.session_state['v15_results'].to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_v15_valorisation.csv','text/csv',key='v15_export')
 
             if not checks.empty:
                 st.markdown('#### Contrôles de cohérence')
@@ -261,7 +299,7 @@ elif menu=='Analyse fondamentale':
             for i,item in enumerate(extracted['tables'][:15]):
                 with st.expander(f"Page {item['page']} · Tableau {i+1} · {item['method']}"):
                     st.dataframe(item['data'],hide_index=True,use_container_width=True)
-        st.warning('Ratios et valeur intrinsèque suspendus : il faut confirmer les périodes, les unités, les colonnes, le nombre d’actions et les postes financiers. Aucune donnée manquante n’est remplacée par zéro.')
+        st.caption('Les résultats de valorisation V1.5 restent conditionnés à la vérification du capital, des flux et des hypothèses. Aucune donnée manquante n’est remplacée par zéro.')
     st.link_button('Voir toutes les publications officielles', 'https://www.brvm.org/fr/type-document/etats-financiers?page=1')
 
 elif menu=='Valeur intrinsèque':

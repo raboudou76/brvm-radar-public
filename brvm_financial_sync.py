@@ -9,7 +9,7 @@ from structured_financials import extract_structured
 
 INDEX=BASE+'/fr/rapports-societe-cotes'
 METRICS={'chiffre_affaires':"Chiffre d'affaires",'pnb':"Chiffre d'affaires",'resultat_net':'Résultat net'}
-ALIASES={'SMBC':['smb','societe multinationale de bitumes'], 'SGBC':['sgci','sgbci','societe generale','societe generale cote d ivoire']}
+from brvm_registry import identities
 
 def _annual(title):
     t=norm(title)
@@ -17,13 +17,14 @@ def _annual(title):
 
 def _society_pages(issuer):
     issuer=issuer.strip(); code=issuer.upper()
-    guesses=ALIASES.get(code,[])[:1]+[issuer.lower()]
-    guesses.extend(ALIASES.get(code,[]))
+    identity=identities(code)
+    guesses=identity['slugs']+[issuer.lower()]
+    guesses.extend(identity['slugs'])
     if code=='SMBC': guesses.insert(0,'smb')
     # Index is optional: a failure must not prevent known direct issuer pages.
     try:
         soup=get_html(INDEX)
-        terms=[norm(issuer)]+[norm(x) for x in ALIASES.get(code,[])]
+        terms=[norm(x) for x in identity['aliases']]
         for a in soup.select('a[href]'):
             href=urljoin(BASE,a['href']); label=norm(a.get_text(' ',strip=True))
             if '/rapports-societe-cotes/' in href and any(t in label or t in norm(href) for t in terms if len(t)>2):

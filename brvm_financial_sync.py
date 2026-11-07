@@ -1,79 +1,96 @@
-"""BRVM RADAR 1.8.2: conservative live financial-report discovery and extraction.
-
-Only extract when the existing structured extractor identifies both a period and
-explicit millions-FCFA units. Missing or conflicting values are left blank.
-"""
-from datetime import datetime, timezone
+"""Recherche directe des publications annuelles sur les pages sociétés BRVM."""
+from datetime import datetime,timezone
 import re
+from urllib.parse import urljoin
 import pandas as pd
-from auto_financials import discover, download_pdf
-from structured_financials import extract_structured, extract_annual_tables
+from bs4 import BeautifulSoup
+from auto_financials import BASE, FIN, get_html, safe_url, download_pdf, discover, norm
+from structured_financials import extract_structured
 
-METRICS = {"chiffre_affaires": "Chiffre d'affaires", "resultat_net": "Résultat net", "pnb": "PNB"}
+INDEX=BASE+'/fr/rapports-societe-cotes'
+METRICS={'chiffre_affaires':"Chiffre d'affaires",'pnb':"Chiffre d'affaires",'resultat_net':'Résultat net'}
+ALIASES={'SMBC':['smb','societe multinationale de bitumes'], 'SGBC':['sgci','sgbci','societe generale','societe generale cote d ivoire']}
 
-def _is_annual(item):
-    title = str(item.get('Titre','') + ' ' + item.get('Contexte','')).casefold()
-    return not any(word in title for word in ('trimestre', 'trimestriel', 'semestre', 'semestriel', 't1 ', 't3 ', 's1 ', '9 mois'))
+def _annual(title):
+    t=norm(title)
+    return not any(x in t for x in ('semestre','trimestre','trimestriel','semestriel','activites','commissaires aux comptes','attestation')) and any(x in t for x in ('financier','annuel','exercice','rapport annuel'))
 
-def find_reports(issuer, pages=5):
-    if not issuer or len(issuer.strip()) < 2:
-        return []
-    found = discover(issuer.strip(), pages=pages, max_detail=18)
-    return [r for r in found if r.get('PDF') and _is_annual(r)]
+def _society_pages(issuer):
+    issuer=issuer.strip(); code=issuer.upper()
+    guesses=ALIASES.get(code,[])[:1]+[issuer.lower()]
+    guesses.extend(ALIASES.get(code,[]))
+    if code=='SMBC': guesses.insert(0,'smb')
+    # Index is optional: a failure must not prevent known direct issuer pages.
+    try:
+        soup=get_html(INDEX)
+        terms=[norm(issuer)]+[norm(x) for x in ALIASES.get(code,[])]
+        for a in soup.select('a[href]'):
+            href=urljoin(BASE,a['href']); label=norm(a.get_text(' ',strip=True))
+            if '/rapports-societe-cotes/' in href and any(t in label or t in norm(href) for t in terms if len(t)>2):
+                guesses.append(href.rsplit('/',1)[-1].split('?')[0])
+    except Exception: pass
+    return list(dict.fromkeys(INDEX+'/'+re.sub(r'[^a-z0-9-]','-',x.strip('/').lower()) for x in guesses if x))
 
-def parse_report(pdf_bytes, url, title):
-    _, metrics, _ = extract_structured(pdf_bytes)
-    if metrics.empty:
-        fallback = extract_annual_tables(pdf_bytes)
-        return [dict(r, Source=url, Publication=title) for r in fallback]
-    rows = []
-    for _, metric in metrics.iterrows():
-        key = metric.get('Indicateur')
-        if key not in METRICS or 'millions fcfa' not in str(metric.get('Unité', '')).lower():
-            continue
-        for year_key, value_key in [('Exercice N','2025 ou N'),('Exercice N-1','2024 ou N-1')]:
-            year = pd.to_numeric(metric.get(year_key), errors='coerce')
-            amount = pd.to_numeric(metric.get(value_key), errors='coerce')
-            if pd.notna(year) and 2000 <= year <= 2100 and pd.notna(amount):
-                rows.append({'Année':int(year), 'Indicateur':METRICS[key], 'Montant':float(amount),
-                             'Source':url, 'Publication':title, 'Page PDF':metric.get('Page'),
-                             'Statut':'Extraction automatique à vérifier'})
-    if not rows:
-        rows = [dict(r, Source=url, Publication=title) for r in extract_annual_tables(pdf_bytes)]
+def find_reports(issuer,pages=5):
+    if not issuer or len(issuer.strip())<2: return []
+    results={}
+    for page_url in _society_pages(issuer):
+        for p in range(max(1,min(int(pages),8))):
+            url=page_url+(f'?page={p}' if p else '')
+            try: soup=get_html(url)
+            except Exception: break
+            for a in soup.select('a[href]'):
+                href=urljoin(url,a['href'])
+                if not safe_url(href) or not re.search(r'\.pdf(?:$|\?)',href,re.I): continue
+                row=a.find_parent('tr') or a.parent
+                title=row.get_text(' ',strip=True).replace('Télécharger','').strip() if row else a.get_text(' ',strip=True)
+                if not _annual(title): continue
+                results[href]={'Titre':title,'Contexte':issuer,'URL':href,'PDF':True,'Page source':url}
+            if not soup.select('a[href*="page="]') and p>0: break
+        if results: break
+    if not results:
+        try:
+            for r in discover(issuer,pages=pages,max_detail=18):
+                if r.get('PDF') and _annual(r.get('Titre','')+' '+r.get('Contexte','')): results[r['URL']]=r
+        except Exception: pass
+    return sorted(results.values(),key=lambda r: (int(re.search(r'20\d{2}',r['Titre']).group()) if re.search(r'20\d{2}',r['Titre']) else 0,r['Titre']),reverse=True)
+
+def parse_report(pdf_bytes,url,title):
+    _,metrics,_=extract_structured(pdf_bytes)
+    if metrics.empty:return []
+    rows=[]
+    for _,r in metrics.iterrows():
+        key=r['Indicateur']
+        if key not in METRICS or r['Unité']!='millions FCFA': continue
+        for year_col,val_col in [('Exercice N','2025 ou N'),('Exercice N-1','2024 ou N-1')]:
+            year=pd.to_numeric(r[year_col],errors='coerce'); value=pd.to_numeric(r[val_col],errors='coerce')
+            if pd.notna(year) and 2000<=year<=2100 and pd.notna(value):
+                rows.append({'Année':int(year),'Indicateur':METRICS[key],'Montant':float(value),'Source':url,'Publication':title,'Page PDF':r['Page'],'Statut':'Extraction automatique à vérifier','Libellé source':r['Libellé source']})
     return rows
 
 def consolidate(records):
-    """Reject conflicting figures for a given year and metric rather than choose one."""
-    if not records:
-        return pd.DataFrame(columns=['Année',"Chiffre d'affaires",'Résultat net']), pd.DataFrame()
-    detail = pd.DataFrame(records).drop_duplicates(subset=['Année','Indicateur','Montant','Source'])
-    safe = []
-    for (year, metric), group in detail.groupby(['Année','Indicateur']):
-        values = group['Montant'].unique()
-        if len(values) == 1:
-            safe.append({'Année':year, 'Indicateur':metric, 'Montant':values[0]})
-        else:
-            detail.loc[group.index, 'Statut'] = 'Conflit entre publications — valeur non affichée'
-    if not safe:
-        return pd.DataFrame(columns=['Année',"Chiffre d'affaires",'Résultat net']), detail
-    history = pd.DataFrame(safe).pivot(index='Année', columns='Indicateur', values='Montant').reset_index()
-    history.columns.name = None
-    if 'PNB' in history and history['PNB'].notna().any():
-        history["Chiffre d'affaires"] = history.get("Chiffre d'affaires", pd.Series(index=history.index, dtype=float)).fillna(history['PNB'])
-    for metric in ("Chiffre d'affaires",'Résultat net'):
-        if metric not in history: history[metric] = float('nan')
-    return history[['Année',"Chiffre d'affaires",'Résultat net']].sort_values('Année').tail(5), detail
+    cols=['Année',"Chiffre d'affaires",'Résultat net']
+    if not records:return pd.DataFrame(columns=cols),pd.DataFrame()
+    detail=pd.DataFrame(records).drop_duplicates(subset=['Année','Indicateur','Montant','Source'])
+    safe=[]
+    for (year,metric),group in detail.groupby(['Année','Indicateur']):
+        vals=group['Montant'].round(4).unique()
+        if len(vals)==1: safe.append({'Année':year,'Indicateur':metric,'Montant':vals[0]})
+        else: detail.loc[group.index,'Statut']='Conflit de montants — non affiché'
+    if not safe:return pd.DataFrame(columns=cols),detail
+    history=pd.DataFrame(safe).pivot(index='Année',columns='Indicateur',values='Montant').reset_index()
+    history.columns.name=None
+    for col in cols:
+        if col not in history: history[col]=float('nan')
+    return history[cols].sort_values('Année').tail(5),detail
 
-def sync_financials(reports, max_reports=5):
-    records=[]; errors=[]
+def sync_financials(reports,max_reports=5):
+    records=[];errors=[]
     for report in reports[:max_reports]:
         try:
-            raw = download_pdf(report['URL'])
-            extracted = parse_report(raw, report['URL'], report['Titre'])
-            if not extracted:
-                errors.append(f"{report['Titre'][:70]} : structure non reconnue ou unité non vérifiable")
-            records.extend(extracted)
-        except Exception as exc:
-            errors.append(f"{report['Titre'][:70]} : {type(exc).__name__} — {str(exc)[:120]}")
-    history, detail = consolidate(records)
-    return history, detail, errors, datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
+            raw=download_pdf(report['URL']); found=parse_report(raw,report['URL'],report['Titre'])
+            if not found:errors.append(f"{report['Titre'][:70]} : PDF lu, aucune ligne financière validée (mise en page, année ou unité)")
+            records.extend(found)
+        except Exception as exc: errors.append(f"{report['Titre'][:70]} : {type(exc).__name__} — {str(exc)[:120]}")
+    history,detail=consolidate(records)
+    return history,detail,errors,datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')

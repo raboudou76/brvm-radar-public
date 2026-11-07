@@ -70,9 +70,34 @@ def _labeled_histogram(data, column, unit):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_dividend_history(df, unit="FCFA/action", default_tax=12.0):
+    """Five-year dividend history; gross is used for payout, net for investor cash yield."""
+    if "Année" not in df.columns or "Dividende brut" not in df.columns:
+        st.info("Historique des dividendes indisponible : fournir Année et Dividende brut.")
+        return
+    data=df.copy()
+    data["Année"]=pd.to_numeric(data["Année"],errors="coerce")
+    data["Dividende brut"]=data["Dividende brut"].map(_number)
+    if "Dividende net" in data.columns:
+        data["Dividende net"]=data["Dividende net"].map(_number)
+    elif "IRVM (%)" in data.columns:
+        data["IRVM (%)"]=data["IRVM (%)"].map(_number)
+        data["Dividende net"]=data["Dividende brut"]*(1-data["IRVM (%)"]/100)
+    else:
+        st.warning("Dividende net non publié et IRVM historique non renseigné : estimation au taux sélectionné, à vérifier pour chaque exercice.")
+        data["Dividende net"]=data["Dividende brut"]*(1-default_tax/100)
+    data=data.dropna(subset=["Année"]).sort_values("Année").tail(5)
+    data["Année"]=data["Année"].astype(int)
+    st.markdown("#### Dividendes nets par action — cinq derniers exercices disponibles")
+    _labeled_histogram(data,"Dividende net",unit)
+    st.caption("Le dividende net correspond au profil fiscal sélectionné ou au montant publié, selon la source. Le taux de distribution utilise exclusivement le dividende brut.")
+    st.dataframe(data[["Année","Dividende brut","Dividende net"]],hide_index=True,use_container_width=True)
+
+
 def render_history(df,source="Source non précisée", unit="millions FCFA"):
     data,metric=clean_history(df)
-    st.caption(f"Source : {source} · Unité : {unit} · Années absentes non interpolées")
+    data=data.tail(5).copy()
+    st.caption(f"Source : {source} · Unité : {unit} · Cinq derniers exercices disponibles ; années absentes non interpolées")
     if data.empty: st.warning("Aucun exercice exploitable."); return
     valid=data.dropna(subset=[metric])
     if not valid.empty:
@@ -91,6 +116,8 @@ def render_history(df,source="Source non précisée", unit="millions FCFA"):
     enriched.loc[gaps!=1,["Croissance activité (%)","Croissance RN (%)"]]=float('nan')
     enriched["Marge nette (%)"]=enriched["Résultat net"]/enriched[metric].replace(0,float('nan'))*100
     st.dataframe(enriched,hide_index=True,use_container_width=True)
+    if "Dividende brut" in df.columns:
+        render_dividend_history(df)
     st.download_button("Exporter le dashboard CSV",enriched.to_csv(index=False,sep=";").encode("utf-8-sig"),"brvm_dashboard_historique.csv","text/csv")
 
 def history_from_fundamentals(fundamentals,bank=False):
@@ -116,7 +143,7 @@ def dashboard_page():
     if choice.startswith("Exemple"):
         render_history(DEMO_SGBCI,"Étude SGBCI fournie — exercices 2020 et 2024")
     else:
-        st.caption("CSV séparé par ; ou , avec colonnes Année, Résultat net, Chiffre d'affaires (ou PNB), montants en millions FCFA.")
+        st.caption("CSV séparé par ; ou , avec colonnes Année, Résultat net, Chiffre d'affaires (ou PNB), montants en millions FCFA. Colonnes facultatives : Dividende brut, Dividende net ou IRVM (%), en FCFA/action.")
         uploaded=st.file_uploader("Historique financier CSV",type=["csv"],key="dashboard_csv")
         if uploaded:
             try:

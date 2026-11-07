@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 import re
 import pandas as pd
 from auto_financials import discover, download_pdf
-from structured_financials import extract_structured
+from structured_financials import extract_structured, extract_annual_tables
 
-METRICS = {"chiffre_affaires": "Chiffre d'affaires", "resultat_net": "Résultat net"}
+METRICS = {"chiffre_affaires": "Chiffre d'affaires", "resultat_net": "Résultat net", "pnb": "PNB"}
 
 def _is_annual(item):
     title = str(item.get('Titre','') + ' ' + item.get('Contexte','')).casefold()
@@ -24,7 +24,8 @@ def find_reports(issuer, pages=5):
 def parse_report(pdf_bytes, url, title):
     _, metrics, _ = extract_structured(pdf_bytes)
     if metrics.empty:
-        return []
+        fallback = extract_annual_tables(pdf_bytes)
+        return [dict(r, Source=url, Publication=title) for r in fallback]
     rows = []
     for _, metric in metrics.iterrows():
         key = metric.get('Indicateur')
@@ -37,6 +38,8 @@ def parse_report(pdf_bytes, url, title):
                 rows.append({'Année':int(year), 'Indicateur':METRICS[key], 'Montant':float(amount),
                              'Source':url, 'Publication':title, 'Page PDF':metric.get('Page'),
                              'Statut':'Extraction automatique à vérifier'})
+    if not rows:
+        rows = [dict(r, Source=url, Publication=title) for r in extract_annual_tables(pdf_bytes)]
     return rows
 
 def consolidate(records):
@@ -55,7 +58,9 @@ def consolidate(records):
         return pd.DataFrame(columns=['Année',"Chiffre d'affaires",'Résultat net']), detail
     history = pd.DataFrame(safe).pivot(index='Année', columns='Indicateur', values='Montant').reset_index()
     history.columns.name = None
-    for metric in METRICS.values():
+    if 'PNB' in history and history['PNB'].notna().any():
+        history["Chiffre d'affaires"] = history.get("Chiffre d'affaires", pd.Series(index=history.index, dtype=float)).fillna(history['PNB'])
+    for metric in ("Chiffre d'affaires",'Résultat net'):
         if metric not in history: history[metric] = float('nan')
     return history[['Année',"Chiffre d'affaires",'Résultat net']].sort_values('Année').tail(5), detail
 

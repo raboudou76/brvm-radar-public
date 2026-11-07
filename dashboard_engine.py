@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 from historical_smb import smb_financial_history, smb_dividend_history, FINANCIAL_SOURCE
+from brvm_sync import fetch_dividends, for_issuer, URL as DIVIDENDS_URL
 
 DEMO_SGBCI = pd.DataFrame([
     {"Année":2020,"PNB":164062,"Résultat net":48435},
@@ -139,6 +140,34 @@ def history_from_fundamentals(fundamentals,bank=False):
         rows.append(row)
     return pd.DataFrame(rows)
 
+@st.cache_data(ttl=6*3600, show_spinner=False)
+def cached_dividend_sync(max_pages):
+    return fetch_dividends(max_pages=max_pages)
+
+def render_live_dividends(key="dashboard"):
+    st.markdown("### Synchronisation des dividendes — BRVM")
+    st.caption("Lecture des annonces publiques BRVM (cache de 6 h). La couverture dépend des pages accessibles ; les exercices manquants restent vides.")
+    pages = st.slider("Pages BRVM à consulter", 1, 30, 12, key=f"{key}_pages")
+    if st.button("Synchroniser les annonces BRVM", key=f"{key}_sync"):
+        cached_dividend_sync.clear()
+    try:
+        records, synced_at = cached_dividend_sync(pages)
+    except Exception as exc:
+        st.warning(f"Synchronisation BRVM indisponible : {exc}. Les données intégrées et l'import CSV restent utilisables.")
+        return
+    st.caption(f"Dernière consultation : {synced_at} · {len(records)} annonces extraites · Source : {DIVIDENDS_URL}")
+    issuers = sorted(records["Société"].dropna().unique())
+    index = issuers.index("SMB") if "SMB" in issuers else 0
+    issuer = st.selectbox("Société ayant une annonce accessible", issuers, index=index, key=f"{key}_issuer")
+    selected = for_issuer(records, issuer)
+    if issuer == "SMB":
+        st.info("SMB 2025 : 704 FCFA nets pour personne physique (référence utilisateur), contre 800 FCFA dans la colonne net de la BRVM. Les deux valeurs sont conservées pour traçabilité.")
+    else:
+        st.warning("Les montants BRVM sont présentés comme publiés ; le net réellement perçu par une personne physique peut différer. Aucune conversion fiscale automatique non justifiée.")
+    render_dividend_history(selected)
+    st.download_button("Exporter les annonces BRVM CSV", selected.to_csv(index=False,sep=";").encode("utf-8-sig"), f"dividendes_brvm_{issuer.replace(' ','_')}.csv", "text/csv", key=f"{key}_download")
+
+
 def dashboard_page():
     st.subheader("Dashboard financier — histogrammes et tendances")
     st.info("Les données de démonstration SGBCI proviennent de l'étude fournie et ne sont pas des cours ou comptes actualisés.")
@@ -148,7 +177,7 @@ def dashboard_page():
         st.caption("Jeu documenté, non synchronisé en temps réel. Vérifier les mises à jour dans les sources liées.")
         render_history(smb_financial_history(), FINANCIAL_SOURCE)
         st.markdown("### Dividendes nets — SMB CI")
-        st.warning("Exercice 2025 : avis BRVM = 800 FCFA nets ; certaines plateformes indiquent 704 FCFA. Divergence à résoudre avant toute décision. Les dividendes bruts non confirmés restent indisponibles.")
+        st.info("SMB 2025 : dividende net personne physique = 704 FCFA (référence utilisateur) ; la BRVM affiche 800 FCFA nets. Les deux montants sont distingués.")
         render_dividend_history(smb_dividend_history())
     elif choice.startswith("Exemple"):
         render_history(DEMO_SGBCI,"Étude SGBCI fournie — exercices 2020 et 2024")
@@ -161,3 +190,6 @@ def dashboard_page():
                 df=pd.read_csv(io.BytesIO(raw),sep=None,engine="python",encoding="utf-8-sig")
                 render_history(df,f"Fichier importé : {uploaded.name}")
             except Exception as exc:st.error(f"Historique non exploitable : {exc}")
+
+    st.divider()
+    render_live_dividends(key="dashboard")

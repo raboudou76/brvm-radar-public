@@ -9,6 +9,7 @@ from finance_engine import parse_amount
 METRICS = {
  'chiffre_affaires': ('resultat', r'^chiffre d.affaires$'),
  'resultat_net': ('resultat', r'^resultat net$'),
+ 'pnb': ('resultat', r'^(?:produit net bancaire|pnb)$'),
  'resultat_exploitation': ('resultat', r'^resultat d.exploitation$'),
  'ebe': ('resultat', r'^excedent brut d.exploitation$'),
  'total_actif': ('bilan', r'^total actif$'),
@@ -74,6 +75,7 @@ def extract_structured(pdf_bytes):
     doc=fitz.open(stream=pdf_bytes,filetype='pdf')
     if doc.page_count>100:raise ValueError('PDF supérieur à 100 pages')
     rows=[]
+    document_unit = any('en millions de fcfa' in norm(pg.get_text('text')) or 'en millions de f cfa' in norm(pg.get_text('text')) for pg in doc)
     for idx,page in enumerate(doc):
         # The three regions are detected from statement headings on this known compact layout.
         text=norm(page.get_text('text'))
@@ -95,7 +97,7 @@ def extract_structured(pdf_bytes):
             if len(subset)>order:matches=subset.iloc[[order]]
         if len(matches)==1:
             r=matches.iloc[0]
-            metrics.append({'Indicateur':key,'2025 ou N':r['Valeur N'],'2024 ou N-1':r['Valeur N-1'],'Exercice N':r['Année N'],'Exercice N-1':r['Année N-1'],'Unité':'millions FCFA' if 'en millions de fcfa' in norm(text) else 'à confirmer','Page':r['Page'],'Libellé source':r['Libellé'],'Statut':'Extrait automatiquement — à contrôler'})
+            metrics.append({'Indicateur':key,'2025 ou N':r['Valeur N'],'2024 ou N-1':r['Valeur N-1'],'Exercice N':r['Année N'],'Exercice N-1':r['Année N-1'],'Unité':'millions FCFA' if document_unit else 'à confirmer','Page':r['Page'],'Libellé source':r['Libellé'],'Statut':'Extrait automatiquement — à contrôler'})
     m=pd.DataFrame(metrics)
     checks=[]
     if not m.empty:
@@ -105,3 +107,61 @@ def extract_structured(pdf_bytes):
                 a,b=by['total_actif'][col],by['total_passif'][col]
                 checks.append({'Contrôle':f'Bilan équilibré {year}','Écart (millions FCFA)':a-b,'Résultat':'OK' if a==b else 'ÉCART'})
     return df,m,pd.DataFrame(checks)
+
+
+def extract_annual_tables(pdf_bytes):
+    """Fallback: annual side-by-side text tables, with explicit unit and year headers.
+
+    Rejects pages without clear year columns; never estimates amounts.
+    """
+    import fitz
+    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+    if doc.page_count > 100 or len(pdf_bytes) > 25 * 1024 * 1024:
+        doc.close()
+        raise ValueError('PDF trop volumineux')
+    all_text = ' '.join(norm(page.get_text('text')) for page in doc)
+    unit = None
+    for pattern, factor in ((r'en milliards (?:de )?(?:f ?cfa|fcfa)', 1000),
+                            (r'en millions (?:de )?(?:f ?cfa|fcfa)', 1),
+                            (r'en milliers (?:de )?(?:f ?cfa|fcfa)', .001)):
+        if re.search(pattern, all_text):
+            if unit is not None:
+                unit = None  # Multiple units in one document: unsafe for fallback.
+                break
+            unit = factor
+    if unit is None:
+        doc.close()
+        return []
+    patterns = {
+        'Chiffre d\'affaires': r'(?:chiffre d.affaires(?: net)?|produits des activites ordinaires|total produits d.exploitation)',
+        'PNB': r'(?:produit net bancaire|pnb)',
+        'Résultat net': r'(?:resultat net(?: de l.exercice| part du groupe)?|benefice net(?: de l.exercice)?)',
+    }
+    records=[]
+    for page_no,page in enumerate(doc,1):
+        lines = [line.strip() for line in page.get_text('text', sort=True).splitlines() if line.strip()]
+        for idx,line in enumerate(lines):
+            years = re.findall(r'(?<!\d)(20(?:0\d|1\d|2\d))(?!\d)',line)
+            if len(years) < 2 or len(set(years)) < 2:
+                continue
+            y0,y1 = map(int, years[:2])
+            if abs(y0-y1)>2:
+                continue
+            # Only the next 55 lines can belong to this table.
+            for row in lines[idx+1:idx+56]:
+                normalized=norm(row)
+                for label,pattern in patterns.items():
+                    if not re.match(r'^'+pattern+r'\b',normalized):
+                        continue
+                    # Require amounts on the same text line, not a nearby unrelated row.
+                    suffix=re.sub(r'^'+pattern+r'\b','',normalized,count=1)
+                    amounts=re.findall(r'(?<![\w])\(?-?\d+(?:[.,]\d+)?\)?(?![\w])',suffix)
+                    amounts=[x for x in amounts if parse_amount(x) is not None]
+                    if len(amounts)!=2:
+                        continue
+                    for year,raw in zip((y0,y1),amounts):
+                        records.append({'Année':year,'Indicateur':label,'Montant':parse_amount(raw)*unit,
+                                        'Page PDF':page_no,'Statut':'Extraction textuelle automatique à vérifier'})
+    doc.close()
+    # Ambiguous duplicate values must be rejected downstream by consolidate().
+    return records

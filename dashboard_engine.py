@@ -3,6 +3,7 @@ import io
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+from historical_smb import smb_financial_history, smb_dividend_history, FINANCIAL_SOURCE
 
 DEMO_SGBCI = pd.DataFrame([
     {"Année":2020,"PNB":164062,"Résultat net":48435},
@@ -72,11 +73,13 @@ def _labeled_histogram(data, column, unit):
 
 def render_dividend_history(df, unit="FCFA/action", default_tax=12.0):
     """Five-year dividend history; gross is used for payout, net for investor cash yield."""
-    if "Année" not in df.columns or "Dividende brut" not in df.columns:
-        st.info("Historique des dividendes indisponible : fournir Année et Dividende brut.")
+    if "Année" not in df.columns or not ({"Dividende brut", "Dividende net"} & set(df.columns)):
+        st.info("Historique indisponible : fournir Année et Dividende net ou Dividende brut.")
         return
     data=df.copy()
     data["Année"]=pd.to_numeric(data["Année"],errors="coerce")
+    if "Dividende brut" not in data.columns:
+        data["Dividende brut"]=float("nan")
     data["Dividende brut"]=data["Dividende brut"].map(_number)
     if "Dividende net" in data.columns:
         data["Dividende net"]=data["Dividende net"].map(_number)
@@ -91,7 +94,7 @@ def render_dividend_history(df, unit="FCFA/action", default_tax=12.0):
     st.markdown("#### Dividendes nets par action — cinq derniers exercices disponibles")
     _labeled_histogram(data,"Dividende net",unit)
     st.caption("Le dividende net correspond au profil fiscal sélectionné ou au montant publié, selon la source. Le taux de distribution utilise exclusivement le dividende brut.")
-    st.dataframe(data[["Année","Dividende brut","Dividende net"]],hide_index=True,use_container_width=True)
+    st.dataframe(data[[c for c in ["Année","Dividende brut","Dividende net","Statut","Source"] if c in data.columns]],hide_index=True,use_container_width=True)
 
 
 def render_history(df,source="Source non précisée", unit="millions FCFA"):
@@ -139,8 +142,15 @@ def history_from_fundamentals(fundamentals,bank=False):
 def dashboard_page():
     st.subheader("Dashboard financier — histogrammes et tendances")
     st.info("Les données de démonstration SGBCI proviennent de l'étude fournie et ne sont pas des cours ou comptes actualisés.")
-    choice=st.radio("Source des données",["Exemple SGBCI (2020 et 2024)","Importer un historique CSV"],horizontal=True)
-    if choice.startswith("Exemple"):
+    choice=st.radio("Source des données",["SMB CI — historique documenté (2021–2025)","Exemple SGBCI (2020 et 2024)","Importer un historique CSV"],horizontal=True)
+    if choice.startswith("SMB CI"):
+        st.success("Historique SMB chargé automatiquement depuis le jeu de référence intégré — aucune importation CSV nécessaire.")
+        st.caption("Jeu documenté, non synchronisé en temps réel. Vérifier les mises à jour dans les sources liées.")
+        render_history(smb_financial_history(), FINANCIAL_SOURCE)
+        st.markdown("### Dividendes nets — SMB CI")
+        st.warning("Exercice 2025 : avis BRVM = 800 FCFA nets ; certaines plateformes indiquent 704 FCFA. Divergence à résoudre avant toute décision. Les dividendes bruts non confirmés restent indisponibles.")
+        render_dividend_history(smb_dividend_history())
+    elif choice.startswith("Exemple"):
         render_history(DEMO_SGBCI,"Étude SGBCI fournie — exercices 2020 et 2024")
     else:
         st.caption("CSV séparé par ; ou , avec colonnes Année, Résultat net, Chiffre d'affaires (ou PNB), montants en millions FCFA. Colonnes facultatives : Dividende brut, Dividende net ou IRVM (%), en FCFA/action.")

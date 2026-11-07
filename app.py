@@ -10,7 +10,7 @@ from auto_financials import discover, download_pdf, candidates_from_tables
 from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
-from dashboard_engine import dashboard_page, history_from_fundamentals, render_history, render_dividend_history
+from dashboard_engine import dashboard_page, history_from_fundamentals, render_history, render_dividend_history, render_live_dividends
 from historical_smb import smb_dividend_history
 from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
@@ -212,7 +212,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V1.7.3 — Valorisation, dividendes et fonds propres')
+    st.subheader('V1.8.1 — Valorisation, dividendes et fonds propres')
     st.caption('SMB : capitaux propres préremplis depuis les états financiers 2025. Dividende net affiché par défaut pour une personne physique ; fiscalité ajustable.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -258,8 +258,10 @@ elif menu=='Valorisation et dividendes':
         except Exception as exc: st.error('Historique de dividendes non exploitable : '+str(exc))
     elif is_smb:
         st.info('Historique SMB documenté préchargé ; les montants bruts non vérifiés restent vides.')
-        st.warning('Exercice 2025 : avis officiel BRVM = 800 FCFA NETS, différent des 704 FCFA rapportés par certaines plateformes. Le préremplissage brut de l’ancienne version n’est pas une confirmation officielle.')
+        st.info('SMB 2025 : dividende net de référence pour personne physique = 704 FCFA (confirmé par utilisateur). La BRVM affiche 800 FCFA nets : divergence signalée et conservée.')
         render_dividend_history(smb_dividend_history(), default_tax=tax)
+
+    render_live_dividends(key="valuation")
 
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):

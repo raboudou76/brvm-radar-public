@@ -10,6 +10,7 @@ from auto_financials import discover, download_pdf, candidates_from_tables
 from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
+from dashboard_engine import dashboard_page, history_from_fundamentals, render_history
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -113,15 +114,15 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V1.3')
-menu=st.sidebar.radio('Navigation',['Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
+st.sidebar.caption('Investment Intelligence · V1.6.1')
+menu=st.sidebar.radio('Navigation',['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
 st.title('◈ BRVM RADAR')
 st.caption('Bêta publique · Plateforme indépendante de recherche et d’aide à la décision · Données non garanties en temps réel')
 st.info('Données issues de pages publiques BRVM lorsque la connexion fonctionne. Vérifiez toujours la date, le volume et le cours sur la source officielle. Ce service n’est pas affilié à la BRVM.')
 
-if menu in ['Vue du marché','Radar court terme','Fiche action','Portefeuille']:
+if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Portefeuille']:
     try: df,updated=load_market()
     except Exception as exc:
         st.error(f'Connexion BRVM indisponible ou format modifié : {exc}')
@@ -129,7 +130,10 @@ if menu in ['Vue du marché','Radar court terme','Fiche action','Portefeuille']:
         st.stop()
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
 
-if menu=='Vue du marché':
+if menu=='Dashboard financier':
+    dashboard_page()
+
+elif menu=='Vue du marché':
     a,b,c,d=st.columns(4)
     a.metric('Titres disponibles',len(df));b.metric('En hausse',int((df['Variation %']>0).sum()));c.metric('En baisse',int((df['Variation %']<0).sum()));d.metric('Valeur échangée estimée',f"{(df['Clôture']*df['Volume']).sum()/1e9:.2f} Md FCFA")
     q=st.text_input('Rechercher un titre ou une société')
@@ -159,6 +163,49 @@ elif menu=='Publications financières':
                    'https://www.brvm.org/fr/type-document/etats-financiers?page=1',
                    use_container_width=True)
     st.caption('Lien externe : le contenu et les téléchargements sont gérés par la BRVM.')
+
+elif menu=='Actualisation T1 / S1 / T3':
+    st.subheader('V1.6 — Indicateurs actualisés sur 12 mois glissants (TTM)')
+    st.caption('Les données intermédiaires sont généralement cumulées depuis janvier. Le moteur évite de multiplier les bénéfices trimestriels par quatre.')
+    st.link_button('Rapports officiels SMB — BRVM','https://www.brvm.org/fr/rapports-societe-cotes/smb')
+    from interim_engine import compute_ttm, extract_interim
+    period=st.selectbox('Dernière période disponible',['T3','S1','T1'])
+    year=st.number_input('Année du rapport intermédiaire',min_value=2010,max_value=2100,value=2026,step=1)
+    uploaded=st.file_uploader('Rapport intermédiaire officiel PDF (facultatif)',type=['pdf'],key='v16_pdf')
+    if uploaded:
+        unit=st.selectbox('Unité déclarée dans le rapport',['FCFA','millions FCFA'])
+        try:
+            found=extract_interim(uploaded.getvalue(),period,int(year),unit)
+            if found.empty:st.warning('Aucune ligne reconnue avec assez de certitude. Saisis les montants vérifiés dans le rapport ci-dessous.')
+            else:
+                st.info('Extraction candidate : vérifier les montants et les colonnes avec le PDF avant de les recopier.')
+                st.dataframe(found,hide_index=True,use_container_width=True)
+        except Exception as exc:st.warning('Lecture PDF non concluante : '+str(exc))
+    st.markdown('#### Calcul contrôlé — montants en millions FCFA')
+    st.caption('Renseigner les montants publiés, en distinguant exercice annuel N−1, cumul intermédiaire N et cumul intermédiaire N−1.')
+    c1,c2,c3=st.columns(3)
+    with c1: annual=st.number_input('Résultat net annuel N−1',value=13075.0,step=1.0)
+    with c2: current=st.number_input('Résultat net cumul '+str(year),value=8903.818691 if period=='T3' and year==2026 else 0.0,step=1.0)
+    with c3: prior=st.number_input('Résultat net cumul '+str(year-1),value=5687.235678 if period=='T3' and year==2026 else 0.0,step=1.0)
+    shares=st.number_input('Nombre d’actions vérifié',min_value=1,value=7795200,step=100)
+    quote=st.number_input('Cours daté (FCFA/action ; 0 = absent)',min_value=0.0,value=0.0,step=50.0)
+    date_quote=st.date_input('Date du cours de référence') if quote>0 else None
+    verified=st.checkbox('Je confirme que les trois résultats nets sont cumulés sur les périodes correctes et que les unités sont cohérentes.',key='v16_verified')
+    if st.button('Actualiser BPA et PER TTM',key='v16_compute'):
+        if not verified:st.error('Vérification préalable des périodes et montants requise.')
+        else:
+            try:
+                r=compute_ttm(annual*1_000_000,current*1_000_000,prior*1_000_000,shares,quote or None)
+                a,b,c=st.columns(3)
+                a.metric('Résultat net TTM',f"{r['Résultat net TTM (FCFA)']/1_000_000:,.2f} M FCFA")
+                b.metric('BPA TTM',f"{r['BPA TTM (FCFA)']:,.2f} FCFA")
+                c.metric('PER TTM',f"{r['PER TTM']:.2f}x" if r['PER TTM'] is not None else 'Cours requis')
+                if r['Variation période (%)'] is not None:st.metric('Variation du résultat net cumulé',f"{r['Variation période (%)']:+.1f} %")
+                st.caption('PER historique TTM = cours daté / BPA TTM ; non applicable si BPA ≤ 0. Les données sont déclarées par l’utilisateur, pas certifiées par le moteur.')
+                out=pd.DataFrame([{'Société':'SMB (exemple à adapter)','Période':period,'Année':year,'Cours date':str(date_quote) if date_quote else '',**r}])
+                st.download_button('Exporter les indicateurs TTM CSV',out.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_v16_ttm.csv','text/csv')
+            except Exception as exc:st.error('Calcul impossible : '+str(exc))
+    st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Analyser un PDF':
     st.subheader('Extraction des états financiers — laboratoire')
@@ -230,6 +277,13 @@ elif menu=='Analyse fondamentale':
                 st.caption('Données en millions FCFA. Les ratios sont dérivés uniquement des valeurs extraites, avec renvoi à la page source. Vérifiez les chiffres avant toute décision.')
                 st.dataframe(fundamentals,hide_index=True,use_container_width=True)
                 st.download_button('Exporter les états financiers normalisés CSV',fundamentals.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_etats_normalises.csv','text/csv',key='fundamental_export')
+                st.markdown('### Dashboard financier — histogrammes annuels')
+                st.caption('Historique limité aux exercices présents dans le rapport extrait. Pour les banques, utiliser le PNB lorsque disponible.')
+                hist=history_from_fundamentals(fundamentals)
+                if hist.empty or hist["Chiffre d'affaires"].isna().all():
+                    st.info('Chiffre d’affaires non disponible dans ce document ; pour les banques, utiliser le dashboard avec un historique PNB.')
+                else:
+                    render_history(hist,source=extracted['source'])
                 st.markdown('#### Ratios fondamentaux')
                 st.dataframe(ratios_table,hide_index=True,use_container_width=True)
                 st.download_button('Exporter les ratios CSV',ratios_table.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_ratios.csv','text/csv',key='ratios_export')

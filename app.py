@@ -11,6 +11,7 @@ from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
 from dashboard_engine import dashboard_page, history_from_fundamentals, render_history, render_dividend_history
+from historical_smb import smb_dividend_history
 from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
@@ -117,7 +118,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V1.7.1')
+st.sidebar.caption('Investment Intelligence · V1.8.0 — SMB')
 menu=st.sidebar.radio('Navigation',['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -256,7 +257,9 @@ elif menu=='Valorisation et dividendes':
             render_dividend_history(df_div,default_tax=tax)
         except Exception as exc: st.error('Historique de dividendes non exploitable : '+str(exc))
     elif is_smb:
-        st.info('SMB : le dividende brut de référence (800 FCFA/action) est disponible pour un exercice seulement. Pour afficher cinq ans, importer les avis de paiement historiques vérifiés.')
+        st.info('Historique SMB documenté préchargé ; les montants bruts non vérifiés restent vides.')
+        st.warning('Exercice 2025 : avis officiel BRVM = 800 FCFA NETS, différent des 704 FCFA rapportés par certaines plateformes. Le préremplissage brut de l’ancienne version n’est pas une confirmation officielle.')
+        render_dividend_history(smb_dividend_history(), default_tax=tax)
 
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):

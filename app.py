@@ -11,6 +11,7 @@ from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
 from dashboard_engine import dashboard_page, history_from_fundamentals, render_history, render_dividend_history, render_live_dividends
+from unified_dashboard import unified_dashboard_page
 from historical_smb import smb_dividend_history
 from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
@@ -135,7 +136,7 @@ if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche ac
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
 
 if menu=='Dashboard financier':
-    dashboard_page()
+    unified_dashboard_page(df)
 
 elif menu=='Vue du marché':
     a,b,c,d=st.columns(4)

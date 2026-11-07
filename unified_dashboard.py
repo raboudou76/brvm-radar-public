@@ -48,9 +48,8 @@ def match_dividend_issuer(records, symbol, name):
 def _find_reports(symbol, name, pages):
     # Search by exchange symbol, then by official name if needed.
     found=cached_financial_reports(symbol, pages)
-    if normalize(name)!=normalize(symbol):
-        more=cached_financial_reports(name, pages)
-        found=list({r['URL']:r for r in (found+more)}.values())
+    if not found and normalize(name)!=normalize(symbol):
+        found=cached_financial_reports(name, pages)
     return found
 
 
@@ -109,11 +108,14 @@ def unified_dashboard_page(market):
         render_history(history, source='Rapports annuels BRVM (montants candidats à vérifier dans les sources)')
     else:
         st.info('Aucune donnée financière annuelle vérifiable extraite pour ce titre. Les histogrammes ne sont pas simulés.')
+    st.caption(f"Diagnostic : {len(result['reports'])} publication(s) identifiée(s) · {len(result['detail'])} montant(s) extrait(s) · {len(result['errors'])} rapport(s) non exploité(s).")
+    if not result['reports']:
+        st.warning('Aucun rapport annuel PDF trouvé sur les pages BRVM consultées pour cette société.')
+    elif result['detail'].empty:
+        st.warning('Rapports identifiés, mais aucune donnée annuelle exploitable : consulter les motifs ci-dessous.')
     if not result['detail'].empty:
         with st.expander('Traçabilité des montants financiers'):
             st.dataframe(result['detail'],hide_index=True,use_container_width=True)
-    if not result['reports'] and not result['fin_error']:
-        st.warning('Aucun rapport PDF annuel trouvé sur les pages BRVM explorées. Essayez davantage de pages ; les anciennes publications peuvent ne pas être indexées.')
     if result['reports']:
         with st.expander('Publications financières identifiées'):
             st.dataframe(pd.DataFrame(result['reports'])[['Titre','URL']],hide_index=True,use_container_width=True)

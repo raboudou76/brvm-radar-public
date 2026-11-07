@@ -2,6 +2,7 @@
 import io
 import pandas as pd
 import streamlit as st
+import plotly.graph_objects as go
 
 DEMO_SGBCI = pd.DataFrame([
     {"Année":2020,"PNB":164062,"Résultat net":48435},
@@ -29,6 +30,46 @@ def clean_history(df):
     out["Année"]=out["Année"].astype(int)
     return out,metric
 
+def _bar_labels(values, unit):
+    """Use compact, consistent labels; underlying values remain unchanged."""
+    is_millions = "million" in unit.casefold()
+    numeric = pd.to_numeric(values, errors="coerce")
+    if is_millions and numeric.dropna().abs().max() >= 1000:
+        return [f"{v / 1000:,.2f}".replace(",", " ").replace(".", ",") + " Md" if pd.notna(v) else "" for v in numeric]
+    return [f"{v:,.0f}".replace(",", " ") if pd.notna(v) else "" for v in numeric]
+
+
+def _labeled_histogram(data, column, unit):
+    """Plotly histogram with permanent labels above each annual bar."""
+    labels = _bar_labels(data[column], unit)
+    years = data["Année"].astype(str)
+    fig = go.Figure(go.Bar(
+        x=years,
+        y=data[column],
+        text=labels,
+        textposition="outside",
+        textfont=dict(size=13),
+        cliponaxis=False,
+        customdata=labels,
+        hovertemplate="Exercice %{x}<br>Valeur : %{customdata}<extra></extra>",
+        marker_color="#1677A8",
+    ))
+    positive = pd.to_numeric(data[column], errors="coerce").dropna()
+    max_value = positive.max() if not positive.empty else 0
+    min_value = positive.min() if not positive.empty else 0
+    if max_value > 0 and min_value >= 0:
+        fig.update_yaxes(range=[0, max_value * 1.20])
+    fig.update_layout(
+        height=360,
+        margin=dict(l=12, r=16, t=42, b=16),
+        xaxis_title="Exercice",
+        yaxis_title=unit,
+        showlegend=False,
+        xaxis=dict(type="category"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def render_history(df,source="Source non précisée", unit="millions FCFA"):
     data,metric=clean_history(df)
     st.caption(f"Source : {source} · Unité : {unit} · Années absentes non interpolées")
@@ -38,9 +79,9 @@ def render_history(df,source="Source non précisée", unit="millions FCFA"):
         latest=valid.iloc[-1]
         st.metric(f"{metric} — {int(latest['Année'])}",f"{latest[metric]:,.0f} M FCFA".replace(","," "))
     st.markdown(f"#### {metric} — histogramme annuel")
-    st.bar_chart(data.set_index("Année")[[metric]],x_label="Exercice",y_label=unit,use_container_width=True)
+    _labeled_histogram(data, metric, unit)
     st.markdown("#### Résultat net — histogramme annuel")
-    st.bar_chart(data.set_index("Année")[["Résultat net"]],x_label="Exercice",y_label=unit,use_container_width=True)
+    _labeled_histogram(data, "Résultat net", unit)
     st.markdown("#### Croissance et rentabilité")
     enriched=data.copy()
     enriched["Croissance activité (%)"]=enriched[metric].pct_change(fill_method=None)*100

@@ -10,8 +10,9 @@ from auto_financials import discover, download_pdf, candidates_from_tables
 from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
-from dashboard_engine import dashboard_page, history_from_fundamentals, render_history
+from dashboard_engine import dashboard_page, history_from_fundamentals, render_history, render_dividend_history
 from investor_indicators import compute_indicators
+from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
 
 BASE='https://www.brvm.org'
@@ -210,7 +211,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V1.7.1 — Valorisation, dividendes et fonds propres')
+    st.subheader('V1.7.3 — Valorisation, dividendes et fonds propres')
     st.caption('SMB : capitaux propres préremplis depuis les états financiers 2025. Dividende net affiché par défaut pour une personne physique ; fiscalité ajustable.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -245,6 +246,18 @@ elif menu=='Valorisation et dividendes':
         source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''))
         dividend_source=st.text_input('Source du dividende / avis de paiement',value=ref.get('dividend_source',''))
     st.caption('Le dividende net est utilisé pour le rendement net ; le dividende brut est utilisé pour le taux de distribution. Le taux IRVM dépend de la qualité et de la résidence fiscale de l’investisseur.')
+    st.markdown('### Historique des dividendes — cinq ans')
+    st.caption('Importer un CSV avec Année et Dividende brut (FCFA/action) ; facultativement Dividende net ou IRVM (%). Aucun historique n’est inventé si les avis de paiement manquent.')
+    div_history=st.file_uploader('Historique des dividendes CSV',type=['csv'],key='dividend_history_v173')
+    if div_history is not None:
+        try:
+            import io
+            df_div=pd.read_csv(io.BytesIO(div_history.getvalue()),sep=None,engine='python',encoding='utf-8-sig')
+            render_dividend_history(df_div,default_tax=tax)
+        except Exception as exc: st.error('Historique de dividendes non exploitable : '+str(exc))
+    elif is_smb:
+        st.info('SMB : le dividende brut de référence (800 FCFA/action) est disponible pour un exercice seulement. Pour afficher cinq ans, importer les avis de paiement historiques vérifiés.')
+
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):
         if not checked: st.error('Veuillez confirmer les données avant calcul.')
@@ -259,6 +272,23 @@ elif menu=='Valorisation et dividendes':
                 for i,k in enumerate(['BPA TTM','PER TTM','VMC par action','PBR']):
                     v=r[k]; cols[i].metric(k,f'{v:,.2f}' if v is not None else 'N/D')
                 st.dataframe(pd.DataFrame([{'Indicateur':k,'Valeur':v} for k,v in r.items()]),hide_index=True,use_container_width=True)
+                st.markdown('### Interprétation des indicateurs de valorisation')
+                st.caption('Seuils issus du tableau de référence fourni : ils ne sont pas encore calibrés statistiquement sur la BRVM. Une lecture favorable ne constitue pas une recommandation d’achat.')
+                with st.expander('Adapter les seuils de la grille (facultatif)'):
+                    thresholds={}
+                    for metric, (lower, upper) in DEFAULT_THRESHOLDS.items():
+                        x,y=st.columns(2)
+                        with x: lo=st.number_input(f'{metric} — borne basse',min_value=0.01,value=lower,step=0.1,key='v172_low_'+metric)
+                        with y: hi=st.number_input(f'{metric} — borne haute',min_value=0.02,value=upper,step=0.1,key='v172_high_'+metric)
+                        thresholds[metric]=(lo,hi)
+                try:
+                    readings=interpret_valuation(r,price,thresholds)
+                    st.dataframe(pd.DataFrame(readings),hide_index=True,use_container_width=True)
+                    st.download_button('Exporter les interprétations CSV',pd.DataFrame(readings).to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_interpretations_v172.csv','text/csv',key='v172_export')
+                    available=[x for x in readings if x['Valeur'] is not None]
+                    if len(available)<4:st.info('Certains ratios ne sont pas interprétables : vérifier cours, BPA TTM et capitaux propres.')
+                    st.info('Le RVC (PER × PBR) est corrélé aux deux ratios : il ne constitue pas une troisième preuve indépendante. Les banques et les sociétés industrielles doivent être comparées à des références sectorielles distinctes.')
+                except ValueError as err:st.warning('Seuils à corriger : '+str(err))
                 st.download_button('Exporter les indicateurs CSV',pd.DataFrame([{'Société':soc,'Date cours':str(date) if date else '', 'Source':source,'Source dividende':dividend_source,'Profil fiscal':profile,'IRVM %':tax,**r}]).to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_indicateurs_v171.csv','text/csv')
                 st.caption('PER et PBR sont descriptifs, pas des preuves automatiques de sous-valorisation. Le ROE utilise la moyenne des capitaux propres ; le taux de distribution utilise le dividende brut.')
             except Exception as exc: st.error('Calcul impossible : '+str(exc))

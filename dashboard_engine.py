@@ -3,13 +3,9 @@ import io
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
-from historical_smb import smb_financial_history, smb_dividend_history, FINANCIAL_SOURCE
 from brvm_sync import fetch_dividends, for_issuer, URL as DIVIDENDS_URL
+from brvm_financial_sync import find_reports, sync_financials
 
-DEMO_SGBCI = pd.DataFrame([
-    {"Année":2020,"PNB":164062,"Résultat net":48435},
-    {"Année":2024,"PNB":263207,"Résultat net":101228},
-])
 
 def _number(v):
     if pd.isna(v): return None
@@ -168,28 +164,69 @@ def render_live_dividends(key="dashboard"):
     st.download_button("Exporter les annonces BRVM CSV", selected.to_csv(index=False,sep=";").encode("utf-8-sig"), f"dividendes_brvm_{issuer.replace(' ','_')}.csv", "text/csv", key=f"{key}_download")
 
 
+@st.cache_data(ttl=6*3600, show_spinner=False)
+def cached_financial_reports(issuer, pages):
+    return find_reports(issuer, pages=pages)
+
+@st.cache_data(ttl=6*3600, show_spinner=False)
+def cached_financial_history(report_urls):
+    # Tuples are stable cache keys; reconstruct the report dictionaries.
+    reports = [{'URL': url, 'Titre': title} for url, title in report_urls]
+    return sync_financials(reports, max_reports=len(reports))
+
 def dashboard_page():
     st.subheader("Dashboard financier — histogrammes et tendances")
-    st.info("Les données de démonstration SGBCI proviennent de l'étude fournie et ne sont pas des cours ou comptes actualisés.")
-    choice=st.radio("Source des données",["SMB CI — historique documenté (2021–2025)","Exemple SGBCI (2020 et 2024)","Importer un historique CSV"],horizontal=True)
-    if choice.startswith("SMB CI"):
-        st.success("Historique SMB chargé automatiquement depuis le jeu de référence intégré — aucune importation CSV nécessaire.")
-        st.caption("Jeu documenté, non synchronisé en temps réel. Vérifier les mises à jour dans les sources liées.")
-        render_history(smb_financial_history(), FINANCIAL_SOURCE)
-        st.markdown("### Dividendes nets — SMB CI")
-        st.info("SMB 2025 : dividende net personne physique = 704 FCFA (référence utilisateur) ; la BRVM affiche 800 FCFA nets. Les deux montants sont distingués.")
-        render_dividend_history(smb_dividend_history())
-    elif choice.startswith("Exemple"):
-        render_history(DEMO_SGBCI,"Étude SGBCI fournie — exercices 2020 et 2024")
+    st.caption("Données issues des publications officielles BRVM ; aucun jeu de démonstration ou référence financière préchargée.")
+    choice = st.radio("Source", ["Publications financières BRVM (automatique)", "Importer un historique CSV"], horizontal=True)
+    if choice.startswith("Publications"):
+        issuer = st.text_input("Nom ou symbole de la société", value="SMB", help="Exemples : SMB, SONATEL, SGBCI. Utiliser le nom employé dans les publications BRVM.")
+        pages = st.slider("Pages de publications BRVM à explorer", 1, 8, 5)
+        if st.button("Rechercher et actualiser les publications", key="fin_search"):
+            cached_financial_reports.clear()
+            cached_financial_history.clear()
+        if len(issuer.strip()) >= 2:
+            try:
+                reports = cached_financial_reports(issuer.strip(), pages)
+            except Exception as exc:
+                st.warning(f"Recherche BRVM indisponible : {type(exc).__name__} — {exc}")
+                reports = []
+            if reports:
+                st.caption(f"{len(reports)} document(s) PDF annuel(s) candidat(s) trouvé(s). Les rapports intermédiaires sont exclus.")
+                max_reports = min(len(reports), 6)
+                count = st.slider("Nombre de rapports à analyser", 1, max_reports, min(4, max_reports))
+                selected = reports[:count]
+                st.dataframe(pd.DataFrame(selected)[["Titre", "URL"]], hide_index=True, use_container_width=True)
+                with st.spinner("Chargement automatique des données financières BRVM..."):
+                    history, detail, errors, synced = cached_financial_history(tuple((r['URL'],r['Titre']) for r in selected))
+                st.session_state['brvm_fin_history'] = (issuer.strip(), history, detail, errors, synced)
+            else:
+                st.info("Aucun PDF annuel identifié dans les pages consultées. Essayez la dénomination complète ou davantage de pages.")
+        current = st.session_state.get('brvm_fin_history')
+        if current and current[0].casefold() == issuer.strip().casefold():
+            _, history, detail, errors, synced = current
+            st.caption(f"Dernière extraction : {synced} · Les montants sont des candidats extraits automatiquement, à contrôler dans les PDF sources.")
+            if not history.empty:
+                if history["Chiffre d'affaires"].notna().any() or history['Résultat net'].notna().any():
+                    render_history(history, source="Publications BRVM — voir les URL des rapports ci-dessous")
+                else:
+                    st.warning("Aucun chiffre d'affaires ou résultat net exploitable.")
+            else:
+                st.warning("Les documents trouvés ne correspondent pas au format reconnu par l'extracteur. Aucun montant n'est inventé.")
+            if not detail.empty:
+                st.markdown("#### Traçabilité des montants et contrôle des sources")
+                st.dataframe(detail, hide_index=True, use_container_width=True)
+                st.download_button("Exporter les montants sourcés CSV", detail.to_csv(index=False,sep=';').encode('utf-8-sig'), "brvm_extraction_financiere.csv", "text/csv", key="fin_detail_export")
+            for error in errors:
+                st.caption("Rapport non exploité : " + error)
+            st.info("Les banques nécessitent un extracteur PNB spécifique ; un PNB absent ne sera jamais remplacé par un chiffre d'affaires fictif. Les exercices manquants restent vides.")
     else:
-        st.caption("CSV séparé par ; ou , avec colonnes Année, Résultat net, Chiffre d'affaires (ou PNB), montants en millions FCFA. Colonnes facultatives : Dividende brut, Dividende net ou IRVM (%), en FCFA/action.")
-        uploaded=st.file_uploader("Historique financier CSV",type=["csv"],key="dashboard_csv")
+        st.caption("CSV avec Année, Résultat net et Chiffre d'affaires (ou PNB), en millions FCFA. Dividende brut et Dividende net facultatifs, en FCFA/action.")
+        uploaded = st.file_uploader("Historique financier CSV", type=["csv"], key="dashboard_csv")
         if uploaded:
             try:
-                raw=uploaded.getvalue()
-                df=pd.read_csv(io.BytesIO(raw),sep=None,engine="python",encoding="utf-8-sig")
-                render_history(df,f"Fichier importé : {uploaded.name}")
-            except Exception as exc:st.error(f"Historique non exploitable : {exc}")
-
+                df = pd.read_csv(io.BytesIO(uploaded.getvalue()), sep=None, engine="python", encoding="utf-8-sig")
+                render_history(df, f"Fichier importé : {uploaded.name}")
+            except Exception as exc:
+                st.error(f"Historique non exploitable : {exc}")
     st.divider()
     render_live_dividends(key="dashboard")

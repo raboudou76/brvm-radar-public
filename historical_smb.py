@@ -34,5 +34,5 @@ def smb_dividend_history():
         {"Année":2022,"Dividende brut":float('nan'),"Dividende net":720.,"Statut":"Net publié BRVM","Source":DIVIDEND_SOURCES[2022]},
         {"Année":2023,"Dividende brut":float('nan'),"Dividende net":1080.,"Statut":"Net publié BRVM","Source":DIVIDEND_SOURCES[2023]},
         {"Année":2024,"Dividende brut":700.,"Dividende net":616.,"Statut":"Brut BRVM 700; net calculé à 12 %","Source":DIVIDEND_SOURCES[2024]},
-        {"Année":2025,"Dividende brut":float('nan'),"Dividende net":800.,"Statut":"Net BRVM 800; divergence avec sources secondaires (704)","Source":DIVIDEND_SOURCES[2025]},
+        {"Année":2025,"Dividende brut":float('nan'),"Dividende net":704.,"Statut":"Net personne physique 704 (confirmé par utilisateur); BRVM affiche 800","Source":DIVIDEND_SOURCES[2025]},
     ])

@@ -3,6 +3,8 @@ import unicodedata
 import pandas as pd
 import streamlit as st
 from brvm_sync import for_issuer, URL as DIV_URL
+from brvm_registry import dividend_match, identities
+from brvm_calendar import calendar_for_issuer
 from dashboard_engine import (cached_dividend_sync, cached_financial_reports,
                               cached_financial_history, render_history,
                               render_dividend_history)
@@ -27,30 +29,24 @@ def issuer_options(market):
     return sorted(options, key=lambda x:x[0])
 
 
-def match_dividend_issuer(records, symbol, name):
-    """Exact normalized symbol/name matching only; avoid wrong issuer assignments."""
-    if records is None or records.empty or 'Société' not in records:
-        return None
-    choices = [str(x) for x in records['Société'].dropna().unique()]
-    aliases = [symbol, name]
-    if normalize(symbol) in ("smb", "smbc") or "multinationale de bitumes" in normalize(name):
-        aliases.extend(["SMB", "SMB CI"])
-    for key in aliases:
-        matched = [x for x in choices if normalize(x) == normalize(key)]
-        if len(matched)==1:
-            return matched[0]
-    # BRVM may append a country suffix to a symbol; only accept unique explicit prefix.
-    sym=normalize(symbol)
-    matched=[x for x in choices if normalize(x).split(' ')[0] == sym]
-    return matched[0] if len(matched)==1 else None
+def match_dividend_issuer(records,symbol,name):
+    return dividend_match(records,symbol,name)
 
 
 def _find_reports(symbol, name, pages):
     # Search by exchange symbol, then by official name if needed.
-    found=cached_financial_reports(symbol, pages)
-    if not found and normalize(name)!=normalize(symbol):
-        found=cached_financial_reports(name, pages)
-    return found
+    all_reports={}
+    identity=identities(symbol,name)
+    # The official ticker can differ from the publication issuer identifier.
+    queries=[symbol]+identity['aliases'][:3]
+    for query in dict.fromkeys(queries):
+        if len(query)<3:continue
+        try:
+            for report in cached_financial_reports(query,pages):
+                all_reports[report['URL']]=report
+        except Exception:continue
+        if len(all_reports)>=8:break
+    return list(all_reports.values())
 
 
 def unified_dashboard_page(market):
@@ -76,7 +72,7 @@ def unified_dashboard_page(market):
         cached_dividend_sync.clear()
         reports=[]; history=pd.DataFrame(); detail=pd.DataFrame(); errors=[]
         financial_timestamp=None; dividend_timestamp=None
-        dividend_records=pd.DataFrame(); div_error=None; fin_error=None
+        dividend_records=pd.DataFrame(); div_error=None; fin_error=None; calendar_errors=[]; calendar_rows=pd.DataFrame()
         with st.spinner(f'Synchronisation BRVM pour {symbol}...'):
             try:
                 reports=_find_reports(symbol,name,financial_pages)
@@ -90,11 +86,16 @@ def unified_dashboard_page(market):
                 dividend_records,dividend_timestamp=cached_dividend_sync(dividend_pages)
             except Exception as exc:
                 div_error=f'{type(exc).__name__} : {exc}'
+            try:
+                calendar_rows,calendar_errors=calendar_for_issuer(symbol,name)
+            except Exception as exc:
+                calendar_errors=[f'{type(exc).__name__}: {exc}']
         st.session_state['unified_result']={
             'symbol':symbol,'name':name,'history':history,'detail':detail,'errors':errors,
             'reports':reports,'financial_timestamp':financial_timestamp,
             'dividend_records':dividend_records,'dividend_timestamp':dividend_timestamp,
-            'div_error':div_error,'fin_error':fin_error}
+            'div_error':div_error,'fin_error':fin_error,
+            'calendar_rows':calendar_rows,'calendar_errors':calendar_errors}
     result=st.session_state.get('unified_result')
     if not result or (result['symbol'],result['name']) != selected:
         st.info('Sélectionnez une société puis cliquez sur « Synchroniser les données BRVM ».')
@@ -121,20 +122,42 @@ def unified_dashboard_page(market):
             st.dataframe(pd.DataFrame(result['reports'])[['Titre','URL']],hide_index=True,use_container_width=True)
     for err in result['errors'][:8]:
         st.caption('Rapport non exploité : '+err)
+    with st.expander('Contrôle qualité — couverture des données',expanded=False):
+        years=sorted(history['Année'].dropna().astype(int).unique().tolist()) if not history.empty else []
+        st.write({'Émetteur':symbol,'Rapports identifiés':len(result['reports']),
+                  'Montants extraits':len(result['detail']),
+                  'Rapports non exploités':len(result['errors']),
+                  'Exercices financiers':years,
+                  'CA/PNB disponible':int(history["Chiffre d'affaires"].notna().sum()) if not history.empty else 0,
+                  'Résultat net disponible':int(history['Résultat net'].notna().sum()) if not history.empty else 0})
+        if result['errors']:st.write(result['errors'][:12])
+        st.caption('Statut : données extraites automatiquement, à vérifier dans les PDF sources. Aucune valeur financière estimée.')
     st.markdown('### Dividendes nets — cinq derniers exercices disponibles')
     if result['div_error']:
         st.warning('Annonces de dividendes indisponibles : '+result['div_error'])
-    else:
-        matched=match_dividend_issuer(result['dividend_records'],symbol,name)
-        if matched:
-            selected_div=for_issuer(result['dividend_records'],matched)
-            if normalize(symbol) in ('smb','smbc') or normalize(matched) in ('smb','smb ci'):
-                st.info('SMB 2025 : dividende net personne physique retenu à 704 FCFA/action ; montant BRVM publié conservé séparément.')
-            else:
-                st.caption('Montants nets BRVM tels que publiés ; le net fiscal individuel peut différer. Aucun taux fiscal universel supposé.')
-            render_dividend_history(selected_div)
-            st.download_button('Exporter les dividendes CSV',selected_div.to_csv(index=False,sep=';').encode('utf-8-sig'),
-                               f'brvm_dividendes_{symbol}.csv','text/csv',key='unified_export_div')
+    matched=match_dividend_issuer(result['dividend_records'],symbol,name)
+    selected_div=pd.DataFrame()
+    if matched:
+        selected_div=for_issuer(result['dividend_records'],matched)
+    calendar=result.get('calendar_rows',pd.DataFrame())
+    if not calendar.empty:
+        # The official calendar provides a fallback for fiscal 2025 only.
+        if selected_div.empty or 2025 not in selected_div['Année'].tolist():
+            from brvm_sync import for_issuer as _for_issuer
+            fallback=_for_issuer(calendar,calendar.iloc[0]['Société'],smb_personal_override=False)
+            selected_div=pd.concat([selected_div,fallback],ignore_index=True)
+    if not selected_div.empty:
+        selected_div=selected_div.sort_values('Année').drop_duplicates('Année',keep='first').tail(5)
+        if normalize(symbol) in ('smb','smbc'):
+            st.info('SMB 2025 : dividende net personne physique retenu à 704 FCFA/action ; montant BRVM publié conservé séparément.')
         else:
-            st.info('Aucune correspondance certaine entre ce titre et les annonces BRVM consultées. Aucun dividende attribué par approximation.')
+            st.caption('Montants nets BRVM publiés. Le net fiscal individuel peut différer.')
+        render_dividend_history(selected_div)
+        st.download_button('Exporter les dividendes CSV',selected_div.to_csv(index=False,sep=';').encode('utf-8-sig'),
+                           f'brvm_dividendes_{symbol}.csv','text/csv',key='unified_export_div')
+    else:
+        st.info('Aucun dividende attribuable avec certitude à cet émetteur dans les sources consultées.')
+    if result.get('calendar_errors'):
+        with st.expander('Diagnostic calendrier officiel'):
+            st.write(result['calendar_errors'])
     st.caption(f'Sources : publications financières BRVM et {DIV_URL}. Les années manquantes restent vides. La récupération de tous les rapports historiques et du PNB bancaire reste dépendante des formats publiés.')

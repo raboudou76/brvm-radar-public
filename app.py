@@ -11,6 +11,7 @@ from structured_financials import extract_structured
 from analysis_engine import fundamental_analysis, valuation_scenarios
 from valuation_engine import reconstruct_fcfe, run_scenarios, SCENARIOS
 from dashboard_engine import dashboard_page, history_from_fundamentals, render_history
+from investor_indicators import compute_indicators
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -115,7 +116,7 @@ def score_session(df):
 
 st.sidebar.title('◈ BRVM RADAR')
 st.sidebar.caption('Investment Intelligence · V1.6.1')
-menu=st.sidebar.radio('Navigation',['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
+menu=st.sidebar.radio('Navigation',['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
 st.title('◈ BRVM RADAR')
@@ -206,6 +207,42 @@ elif menu=='Actualisation T1 / S1 / T3':
                 st.download_button('Exporter les indicateurs TTM CSV',out.to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_v16_ttm.csv','text/csv')
             except Exception as exc:st.error('Calcul impossible : '+str(exc))
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
+
+elif menu=='Valorisation et dividendes':
+    st.subheader('V1.7 — Valorisation, dividendes et fonds propres')
+    st.info('Renseignez les données issues des rapports et un cours daté. Les champs à zéro pour les données facultatives sont considérés comme indisponibles, sauf dividendes (zéro possible).')
+    soc=st.text_input('Société / symbole',value='SMB')
+    a,b=st.columns(2)
+    with a:
+        price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0)
+        date=st.date_input('Date du cours') if price>0 else None
+        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=1,value=7795200,step=100)
+        ttm=st.number_input('Résultat net TTM (millions FCFA)',value=16292.0,step=1.0)
+        annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=13075.0,step=1.0)
+        previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=0.0,step=1.0)
+    with b:
+        equity=st.number_input('Capitaux propres dernière clôture (millions FCFA ; 0 si absent)',value=0.0,step=1.0)
+        prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA ; 0 si absent)',value=0.0,step=1.0)
+        gross=st.number_input('Dividende brut par action (FCFA ; 0 si aucun)',min_value=0.0,value=0.0,step=10.0)
+        net=st.number_input('Dividende net par action (FCFA ; 0 si absent)',min_value=0.0,value=0.0,step=10.0)
+        source=st.text_input('Source du rapport financier (titre ou URL)')
+    checked=st.checkbox('Je confirme les unités, la période, le périmètre des bénéfices et le nombre d’actions.')
+    if st.button('Calculer les indicateurs',type='primary'):
+        if not checked: st.error('Veuillez confirmer les données avant calcul.')
+        else:
+            try:
+                r=compute_indicators(price=price or None,shares=shares,earnings_ttm=ttm*1e6,
+                    equity=equity*1e6 if equity else None,dividend_gross=gross,dividend_net=net if net else None,
+                    earnings_annual=annual*1e6,earnings_previous=previous*1e6 if previous else None,
+                    equity_previous=prior_equity*1e6 if prior_equity else None)
+                st.caption(f'Société : {soc} · Cours : {date or "non renseigné"} · Source : {source or "non précisée"}')
+                cols=st.columns(4)
+                for i,k in enumerate(['BPA TTM','PER TTM','VMC par action','PBR']):
+                    v=r[k]; cols[i].metric(k,f'{v:,.2f}' if v is not None else 'N/D')
+                st.dataframe(pd.DataFrame([{'Indicateur':k,'Valeur':v} for k,v in r.items()]),hide_index=True,use_container_width=True)
+                st.download_button('Exporter les indicateurs CSV',pd.DataFrame([{'Société':soc,'Date cours':str(date) if date else '', 'Source':source,**r}]).to_csv(index=False,sep=';').encode('utf-8-sig'),'brvm_indicateurs_v17.csv','text/csv')
+                st.caption('PER et PBR sont des ratios descriptifs, pas des preuves automatiques de sous-valorisation. Le ROE nécessite deux valeurs de capitaux propres. Le taux de distribution utilise le bénéfice annuel et le dividende brut par action.')
+            except Exception as exc: st.error('Calcul impossible : '+str(exc))
 
 elif menu=='Analyser un PDF':
     st.subheader('Extraction des états financiers — laboratoire')

@@ -16,6 +16,7 @@ from historical_smb import smb_dividend_history
 from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
+from brvm_radar_postgres_v281 import render_page as render_validated_financials
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -119,8 +120,8 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V1.8.0 — SMB')
-menu=st.sidebar.radio('Navigation',['Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
+st.sidebar.caption('Investment Intelligence · V2.8.1 — Data Engine')
+menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
 st.title('◈ BRVM RADAR')
@@ -135,7 +136,10 @@ if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche ac
         st.stop()
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
 
-if menu=='Dashboard financier':
+if menu=='Données validées (PostgreSQL)':
+    render_validated_financials(st)
+
+elif menu=='Dashboard financier':
     unified_dashboard_page(df)
 
 elif menu=='Vue du marché':

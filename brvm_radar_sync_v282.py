@@ -2,7 +2,7 @@
 Requires brvm_radar_postgres_v281.py, Streamlit, pandas and psycopg.
 """
 import pandas as pd
-from brvm_radar_postgres_v281 import fetch_validated, financial_view
+from brvm_radar_postgres_v281 import fetch_validated, financial_view, tableau_francais, graphique_financier, libelle_financier
 
 
 def _load(st):
@@ -48,14 +48,18 @@ def render_synced_panel(st, ticker=None, title='Historique financier validé', k
     if pivot.empty:
         st.info('Historique non disponible.')
         return
-    st.bar_chart(pivot, x_label='Exercice', y_label='Millions FCFA')
-    st.dataframe(pivot.round(3), use_container_width=True)
+    graphique_financier(st, pivot)
+    historique_fr, ratios_fr = tableau_francais(pivot, ratios)
+    st.dataframe(historique_fr.round(3), use_container_width=True)
     if not ratios.empty:
         st.markdown('**Croissance et rentabilité**')
-        st.dataframe(ratios.round(2), use_container_width=True)
+        st.dataframe(ratios_fr.round(2), use_container_width=True)
     st.markdown('**Traçabilité et précision**')
     cols = [c for c in ('fiscal_year','standardized_account','amount_xof','precision','source_page','quality_status') if c in subset]
-    st.dataframe(subset[cols], hide_index=True, use_container_width=True)
+    details = subset[cols].copy()
+    if 'standardized_account' in details:
+        details['standardized_account'] = details['standardized_account'].map(libelle_financier)
+    st.dataframe(details.rename(columns={'fiscal_year': 'Exercice', 'standardized_account': 'Indicateur', 'amount_xof': 'Montant (FCFA)', 'precision': 'Précision', 'source_page': 'Page source', 'quality_status': 'Statut'}), hide_index=True, use_container_width=True)
     if (subset['precision'].astype(str) == 'ROUNDED_MILLION').any():
         st.info('Certaines valeurs sont arrondies au million FCFA ; ne pas les interpréter comme exactes au franc près.')
     st.caption('Les marges bancaires et industrielles ne sont pas directement comparables. Les historiques ne remplacent pas des états financiers complets.')
@@ -72,5 +76,7 @@ def render_valuation_reference(st, ticker='SMBC'):
             st.info(f'Aucune référence validée pour {ticker}.')
             return
         subset = valid.loc[valid['ticker'].eq(ticker)].copy()
-        st.dataframe(subset[['fiscal_year','standardized_account','amount_xof','precision','source_page']], hide_index=True, use_container_width=True)
+        details = subset[['fiscal_year','standardized_account','amount_xof','precision','source_page']].copy()
+        details['standardized_account'] = details['standardized_account'].map(libelle_financier)
+        st.dataframe(details.rename(columns={'fiscal_year':'Exercice','standardized_account':'Indicateur','amount_xof':'Montant (FCFA)','precision':'Précision','source_page':'Page source'}), hide_index=True, use_container_width=True)
         st.info('Les données ci-dessus sont une référence de contrôle. Elles ne remplacent pas automatiquement les champs TTM, le nombre d’actions, le cours, les dividendes ou les hypothèses de valorisation.')

@@ -17,7 +17,7 @@ from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
 from brvm_radar_postgres_v281 import render_page as render_validated_financials
-from brvm_radar_sync_v282 import render_synced_panel, render_valuation_reference
+from brvm_radar_sync_v284 import render_synced_panel, render_valuation_reference, get_valuation_prefill
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -135,7 +135,7 @@ if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche ac
         st.error(f'Connexion BRVM indisponible ou format modifié : {exc}')
         st.info('Aucun cours de démonstration ne remplace les cours officiels.')
         if menu == 'Dashboard financier':
-            st.subheader('V2.8.2 — Historique financier synchronisé')
+            st.subheader('V2.8.4 — Historique financier et croissance')
             render_synced_panel(st, title='Données validées indépendantes des cotations', key='v282_offline')
         st.stop()
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
@@ -146,7 +146,7 @@ if menu=='Données validées (PostgreSQL)':
 elif menu=='Dashboard financier':
     unified_dashboard_page(df)
     st.divider()
-    render_synced_panel(st, title='V2.8.2 — Historique financier synchronisé', key='v282_dashboard')
+    render_synced_panel(st, title='V2.8.4 — Historique financier et croissance', key='v282_dashboard')
 
 elif menu=='Vue du marché':
     a,b,c,d=st.columns(4)
@@ -169,7 +169,7 @@ elif menu=='Fiche action':
     row=df[df['Symbole']==symbol].iloc[0]
     st.subheader(row['Société'])
     a,b,c=st.columns(3);a.metric('Cours de clôture',f"{row['Clôture']:,.0f} FCFA");b.metric('Variation séance',f"{row['Variation %']:+.2f}%");c.metric('Volume',f"{row['Volume']:,.0f}")
-    render_synced_panel(st, ticker=symbol, title='V2.8.2 — Données financières de cette action', key='v282_fiche')
+    render_synced_panel(st, ticker=symbol, title='V2.8.4 — Données financières de cette action', key='v282_fiche')
     st.info('Le score Opportunity et la valorisation intrinsèque restent soumis à des données complémentaires vérifiées.')
 
 elif menu=='Publications financières':
@@ -224,12 +224,39 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V1.8.1 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.4 — Valorisation, dividendes et fonds propres')
     st.caption('SMB : capitaux propres préremplis depuis les états financiers 2025. Dividende net affiché par défaut pour une personne physique ; fiscalité ajustable.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
     ref=SMB_REFERENCE if is_smb else {}
     render_valuation_reference(st, 'SMBC' if is_smb else soc.strip().upper())
+    ticker_pg = 'SMBC' if is_smb else soc.strip().upper()
+    st.markdown('### V2.8.4 — Préremplissage contrôlé depuis PostgreSQL')
+    st.caption('Les données annuelles VALIDATED sont récupérées en lecture seule. Les cours, actions, TTM, dividendes et hypothèses restent à renseigner ou confirmer séparément.')
+    if st.button('Rechercher les données financières validées', key='v284_rechercher'):
+        st.session_state['v284_reference'] = get_valuation_prefill(st, ticker_pg)
+        st.session_state['v284_reference_ticker'] = ticker_pg
+    reference_pg = st.session_state.get('v284_reference') if st.session_state.get('v284_reference_ticker') == ticker_pg else None
+    if reference_pg:
+        st.success(f"Données annuelles disponibles : {reference_pg['ticker']} — {reference_pg['year']} et {reference_pg['previous_year']}.")
+        for nom, precision in reference_pg['precision'].items():
+            if precision == 'ROUNDED_MILLION':
+                st.caption(f'{nom} : arrondi au million FCFA.')
+            elif precision == 'EXACT_OR_UNSPECIFIED':
+                st.caption(f'{nom} : précision exacte non attestée par les métadonnées.')
+        if st.button('Préremplir les champs annuels disponibles', key='v284_appliquer'):
+            mapping = {'annual':'v284_annual','previous':'v284_previous',
+                       'equity':'v284_equity','prior_equity':'v284_prior_equity'}
+            for src, widget_key in mapping.items():
+                if reference_pg.get(src) is not None:
+                    st.session_state[widget_key] = float(reference_pg[src])
+            st.session_state['v284_last_prefill'] = f"{ticker_pg} — exercice {reference_pg['year']}"
+            st.success('Champs annuels disponibles préremplis. Vérifier avant calcul.')
+    else:
+        st.info('Clique sur « Rechercher » pour récupérer les références validées de cette société.')
+    if st.session_state.get('v284_last_prefill'):
+        st.caption('Dernier préremplissage : ' + st.session_state['v284_last_prefill'])
+
     if is_smb:
         st.info('Référence SMB : capitaux propres 2025 = 42 913 millions FCFA ; 2024 = 35 294 millions FCFA. Les dividendes doivent être rapprochés de l’avis officiel de distribution.')
     pdf=st.file_uploader('Facultatif : importer un bilan PDF pour détecter les capitaux propres',type=['pdf'],key='equity_pdf')
@@ -245,12 +272,12 @@ elif menu=='Valorisation et dividendes':
         price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0)
         date=st.date_input('Date du cours') if price>0 else None
         shares=st.number_input('Nombre d’actions (à vérifier)',min_value=1,value=ref.get('shares',1000000),step=100)
-        ttm=st.number_input('Résultat net TTM (millions FCFA)',value=16292.0 if is_smb else 0.0,step=1.0)
-        annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=ref.get('net_income_m',0.0),step=1.0)
-        previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0)
+        ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key='v284_ttm')
+        annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=float(ref.get('net_income_m',0.0)),step=1.0,key='v284_annual')
+        previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0,key='v284_previous')
     with b:
-        equity=st.number_input('Capitaux propres dernière clôture (millions FCFA)',value=detected['equity_m'] if detected else ref.get('equity_m',0.0),step=1.0)
-        prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA)',value=detected['prior_equity_m'] if detected else ref.get('prior_equity_m',0.0),step=1.0)
+        equity=st.number_input('Capitaux propres dernière clôture (millions FCFA)',value=float(detected['equity_m'] if detected else ref.get('equity_m',0.0)),step=1.0,key='v284_equity')
+        prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA)',value=float(detected['prior_equity_m'] if detected else ref.get('prior_equity_m',0.0)),step=1.0,key='v284_prior_equity')
         gross=st.number_input('Dividende brut par action (FCFA)',min_value=0.0,value=ref.get('dividend_gross',0.0),step=10.0)
         profile=st.selectbox('Profil fiscal',['Personne physique (par défaut)','Autre profil / taux à vérifier'])
         tax=st.number_input('IRVM applicable (%) — vérifier le régime fiscal',min_value=0.0,max_value=100.0,value=12.0 if is_smb and profile.startswith('Personne physique') else 0.0,step=0.5)
@@ -279,6 +306,7 @@ elif menu=='Valorisation et dividendes':
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):
         if not checked: st.error('Veuillez confirmer les données avant calcul.')
+        elif ttm <= 0: st.error('Renseigne et vérifie un résultat net TTM positif. Le résultat annuel ne remplace pas automatiquement le TTM.')
         else:
             try:
                 r=compute_indicators(price=price or None,shares=shares,earnings_ttm=ttm*1e6,

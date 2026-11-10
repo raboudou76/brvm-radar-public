@@ -17,6 +17,7 @@ from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
 from brvm_radar_postgres_v281 import render_page as render_validated_financials
+from brvm_radar_sync_v282 import render_synced_panel, render_valuation_reference
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -132,7 +133,10 @@ if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche ac
     try: df,updated=load_market()
     except Exception as exc:
         st.error(f'Connexion BRVM indisponible ou format modifié : {exc}')
-        st.info('Réessayez plus tard. Aucun cours de démonstration ne remplace les cours officiels.')
+        st.info('Aucun cours de démonstration ne remplace les cours officiels.')
+        if menu == 'Dashboard financier':
+            st.subheader('V2.8.2 — Historique financier synchronisé')
+            render_synced_panel(st, title='Données validées indépendantes des cotations', key='v282_offline')
         st.stop()
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
 
@@ -141,6 +145,8 @@ if menu=='Données validées (PostgreSQL)':
 
 elif menu=='Dashboard financier':
     unified_dashboard_page(df)
+    st.divider()
+    render_synced_panel(st, title='V2.8.2 — Historique financier synchronisé', key='v282_dashboard')
 
 elif menu=='Vue du marché':
     a,b,c,d=st.columns(4)
@@ -163,7 +169,8 @@ elif menu=='Fiche action':
     row=df[df['Symbole']==symbol].iloc[0]
     st.subheader(row['Société'])
     a,b,c=st.columns(3);a.metric('Cours de clôture',f"{row['Clôture']:,.0f} FCFA");b.metric('Variation séance',f"{row['Variation %']:+.2f}%");c.metric('Volume',f"{row['Volume']:,.0f}")
-    st.info('Valorisation intrinsèque, états financiers historiques et score Opportunity : en attente de données vérifiées pour ce titre.')
+    render_synced_panel(st, ticker=symbol, title='V2.8.2 — Données financières de cette action', key='v282_fiche')
+    st.info('Le score Opportunity et la valorisation intrinsèque restent soumis à des données complémentaires vérifiées.')
 
 elif menu=='Publications financières':
     st.subheader('Publications financières officielles')
@@ -222,6 +229,7 @@ elif menu=='Valorisation et dividendes':
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
     ref=SMB_REFERENCE if is_smb else {}
+    render_valuation_reference(st, 'SMBC' if is_smb else soc.strip().upper())
     if is_smb:
         st.info('Référence SMB : capitaux propres 2025 = 42 913 millions FCFA ; 2024 = 35 294 millions FCFA. Les dividendes doivent être rapprochés de l’avis officiel de distribution.')
     pdf=st.file_uploader('Facultatif : importer un bilan PDF pour détecter les capitaux propres',type=['pdf'],key='equity_pdf')

@@ -87,6 +87,41 @@ def financial_view(df, ticker):
     return pivot, ratios
 
 
+# Traduction des libellés sans modification des identifiants PostgreSQL.
+LIBELLES_FINANCIERS = {
+    'EQUITY': 'Capitaux propres',
+    'NET_INCOME': 'Résultat net',
+    'OPERATING_INCOME': 'Résultat d’exploitation',
+    'PNB': 'Produit net bancaire',
+    'REVENUE': 'Chiffre d’affaires',
+}
+
+def libelle_financier(code):
+    return LIBELLES_FINANCIERS.get(str(code), str(code))
+
+def tableau_francais(pivot, ratios):
+    historique = pivot.rename(columns=LIBELLES_FINANCIERS)
+    traductions = {f'{code} croissance %': f'Croissance {libelle} (%)'
+                   for code, libelle in LIBELLES_FINANCIERS.items()}
+    traductions.update({'Marge nette %': 'Marge nette (%)',
+                         'Marge exploitation %': 'Marge d’exploitation (%)'})
+    return historique, ratios.rename(columns=traductions)
+
+def graphique_financier(st, pivot):
+    """Barres groupées : ne pas additionner des grandeurs comptables distinctes."""
+    import altair as alt
+    historique = pivot.rename(columns=LIBELLES_FINANCIERS)
+    data = historique.reset_index().melt(id_vars=['fiscal_year'], var_name='Indicateur', value_name='Millions FCFA')
+    data['Exercice'] = data['fiscal_year'].astype(str)
+    chart = (alt.Chart(data.dropna(subset=['Millions FCFA']))
+             .mark_bar()
+             .encode(x=alt.X('Exercice:N', title='Exercice'),
+                     xOffset=alt.XOffset('Indicateur:N'),
+                     y=alt.Y('Millions FCFA:Q', title='Millions de FCFA'),
+                     color=alt.Color('Indicateur:N', title='Indicateur'),
+                     tooltip=['Exercice:N', 'Indicateur:N', alt.Tooltip('Millions FCFA:Q', format=',.2f')]))
+    st.altair_chart(chart, use_container_width=True)
+
 def render_page(st):
     st.header('V2.8.1 — Données financières validées (Data Engine)')
     st.caption('Lecture PostgreSQL sans écriture · Les valeurs ne sont pas des cotations en temps réel.')
@@ -139,9 +174,10 @@ def render_page(st):
     pivot, ratios = financial_view(valid, ticker)
     if not pivot.empty:
         st.subheader('Historique financier (millions FCFA)')
-        st.bar_chart(pivot, x_label='Exercice', y_label='Millions FCFA')
-        st.dataframe(pivot.round(3), use_container_width=True)
+        graphique_financier(st, pivot)
+        historique_fr, ratios_fr = tableau_francais(pivot, ratios)
+        st.dataframe(historique_fr.round(3), use_container_width=True)
     if not ratios.empty:
         st.subheader('Croissance et rentabilité — ratios indicatifs')
-        st.dataframe(ratios.round(2), use_container_width=True)
+        st.dataframe(tableau_francais(pivot, ratios)[1].round(2), use_container_width=True)
     st.warning('BPA, PER, PBR et valeur intrinsèque non calculés ici : actions en circulation, cours daté et autres données doivent être vérifiés. Les valeurs arrondies ne sont pas exactes au franc près.')

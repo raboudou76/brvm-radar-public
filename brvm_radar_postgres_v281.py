@@ -107,20 +107,70 @@ def tableau_francais(pivot, ratios):
                          'Marge exploitation %': 'Marge d’exploitation (%)'})
     return historique, ratios.rename(columns=traductions)
 
-def graphique_financier(st, pivot):
-    """Barres groupées : ne pas additionner des grandeurs comptables distinctes."""
+def _histogrammes_separes(st, tableau, unite, prefixe):
+    """Un histogramme par colonne, sans mélange de séries ou d'unités."""
     import altair as alt
-    historique = pivot.rename(columns=LIBELLES_FINANCIERS)
-    data = historique.reset_index().melt(id_vars=['fiscal_year'], var_name='Indicateur', value_name='Millions FCFA')
-    data['Exercice'] = data['fiscal_year'].astype(str)
-    chart = (alt.Chart(data.dropna(subset=['Millions FCFA']))
-             .mark_bar()
-             .encode(x=alt.X('Exercice:N', title='Exercice'),
-                     xOffset=alt.XOffset('Indicateur:N'),
-                     y=alt.Y('Millions FCFA:Q', title='Millions de FCFA'),
-                     color=alt.Color('Indicateur:N', title='Indicateur'),
-                     tooltip=['Exercice:N', 'Indicateur:N', alt.Tooltip('Millions FCFA:Q', format=',.2f')]))
-    st.altair_chart(chart, use_container_width=True)
+    if tableau.empty:
+        st.info('Aucune série disponible pour les graphiques.')
+        return
+    for position, indicateur in enumerate(tableau.columns):
+        serie = pd.to_numeric(tableau[indicateur], errors='coerce').dropna()
+        if serie.empty:
+            continue
+        donnees = pd.DataFrame({
+            'Exercice': [str(int(y)) for y in serie.index],
+            'Valeur': serie.astype(float).values,
+        })
+        st.markdown(f'**{indicateur}**')
+        graphique = (alt.Chart(donnees)
+            .mark_bar(size=65)
+            .encode(
+                x=alt.X('Exercice:N', title='Exercice', sort=None),
+                y=alt.Y('Valeur:Q', title=unite, scale=alt.Scale(zero=True)),
+                tooltip=[alt.Tooltip('Exercice:N', title='Exercice'),
+                         alt.Tooltip('Valeur:Q', title=unite, format=',.2f')],
+            ).properties(height=230))
+        st.altair_chart(graphique, use_container_width=True, key=f'{prefixe}_{position}')
+
+
+def graphique_financier(st, pivot):
+    """Une barre par exercice et une courbe de croissance sur axe secondaire par indicateur."""
+    import altair as alt
+    for pos, code in enumerate(pivot.columns):
+        series = pd.to_numeric(pivot[code], errors='coerce').dropna().sort_index()
+        if series.empty:
+            continue
+        growth = series.pct_change(fill_method=None).mul(100)
+        frame = pd.DataFrame({'Exercice': [str(int(y)) for y in series.index],
+                              'Montant': series.to_numpy(dtype=float),
+                              'Croissance': growth.to_numpy(dtype=float)})
+        st.markdown(f'**{libelle_financier(code)}**')
+        base = alt.Chart(frame).encode(x=alt.X('Exercice:N', title='Exercice', sort=None))
+        bars = base.mark_bar(size=65, color='#1477bd').encode(
+            y=alt.Y('Montant:Q', title='Millions de FCFA', axis=alt.Axis(titleColor='#1477bd'), scale=alt.Scale(zero=True)),
+            tooltip=[alt.Tooltip('Exercice:N'), alt.Tooltip('Montant:Q', title='Millions FCFA', format=',.2f')])
+        # Aucune courbe isolée si une seule année est disponible.
+        if growth.notna().any():
+            line = base.mark_line(point=alt.OverlayMarkDef(filled=True, size=85), color='#df7436', strokeWidth=3).encode(
+                y=alt.Y('Croissance:Q', title='Croissance annuelle (%)', axis=alt.Axis(titleColor='#df7436')),
+                tooltip=[alt.Tooltip('Exercice:N'), alt.Tooltip('Croissance:Q', title='Croissance (%)', format='+.2f')])
+            chart = alt.layer(bars, line).resolve_scale(y='independent').properties(height=260)
+            st.caption('Barres : montant en millions FCFA · Ligne orange : croissance annuelle (%) sur axe droit. Pas de taux pour la première année.')
+        else:
+            chart = bars.properties(height=260)
+        st.altair_chart(chart, use_container_width=True, key=f'finance_mixte_{pos}')
+
+
+def graphiques_ratios(st, pivot, ratios):
+    """Marges séparées; les croissances figurent déjà sur chaque graphique de montant."""
+    if ratios.empty:
+        return
+    _, ratios_fr = tableau_francais(pivot, ratios)
+    margins = ratios_fr[[c for c in ratios_fr if not c.startswith('Croissance ')]]
+    if margins.empty:
+        st.caption('Les taux de croissance sont représentés par des lignes sur les graphiques de montants.')
+    else:
+        _histogrammes_separes(st, margins, 'Pourcentage (%)', 'marges')
 
 def render_page(st):
     st.header('V2.8.1 — Données financières validées (Data Engine)')
@@ -179,5 +229,6 @@ def render_page(st):
         st.dataframe(historique_fr.round(3), use_container_width=True)
     if not ratios.empty:
         st.subheader('Croissance et rentabilité — ratios indicatifs')
+        graphiques_ratios(st, pivot, ratios)
         st.dataframe(tableau_francais(pivot, ratios)[1].round(2), use_container_width=True)
     st.warning('BPA, PER, PBR et valeur intrinsèque non calculés ici : actions en circulation, cours daté et autres données doivent être vérifiés. Les valeurs arrondies ne sont pas exactes au franc près.')

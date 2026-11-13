@@ -34,7 +34,7 @@ def earnings_capitalization(eps, required_return, growth):
 
 
 def render_annual_valuation(st, ticker):
-    st.markdown('### V2.8.5 — Ratios annuels et scénarios de valorisation')
+    st.markdown('### V2.8.6 — Ratios et sources officielles automatisées')
     st.caption('Données annuelles VALIDATED uniquement. Le BPA et le PER annuels ne remplacent pas le BPA/PER TTM. Aucune donnée de marché n’est inventée.')
     if st.button('Charger les références annuelles V2.8.5', key='v285_load'):
         st.session_state['v285_reference'] = get_valuation_prefill(st, ticker)
@@ -56,18 +56,49 @@ def render_annual_valuation(st, ticker):
         st.warning('Au moins un montant est arrondi au million FCFA. Les ratios calculés sont approximatifs.')
     if any(v == 'EXACT_OR_UNSPECIFIED' for v in ref['precision'].values()):
         st.info('Précision exacte non attestée pour certains montants : vérifier la documentation.')
-    shares = st.number_input('Nombre d’actions en circulation — saisir et vérifier', min_value=0, value=0, step=100, key=f'v285_shares_{ticker}')
-    shares_source = st.text_input('Source du nombre d’actions (obligatoire)', key=f'v285_shares_source_{ticker}')
-    price = st.number_input('Cours de référence (FCFA/action) — facultatif', min_value=0.0, value=0.0, step=50.0, key=f'v285_price_{ticker}')
-    price_date = st.date_input('Date du cours de référence', value=None, key=f'v285_price_date_{ticker}') if price > 0 else None
-    price_source = st.text_input('Source du cours', key=f'v285_price_source_{ticker}') if price > 0 else ''
-    confirmed = st.checkbox('Je confirme le nombre d’actions, sa source et, le cas échéant, le cours daté et sa source.', key=f'v285_confirm_{ticker}')
-    if not (shares > 0 and shares_source.strip() and confirmed):
-        st.info('Renseigner et confirmer le nombre d’actions ainsi que sa source pour activer les calculs.')
+    from brvm_market_v286 import get_official_market_price, extract_shares_from_issuer_pdf, _fetch, OfficialSourceError
+    st.markdown('#### V2.8.6 — Sources officielles automatiques')
+    st.caption('Le cours est extrait du dernier BOC PDF accessible. Le nombre d’actions doit être identifié dans un rapport officiel de l’émetteur ; le volume échangé n’est jamais utilisé.')
+    if st.button('Actualiser le dernier BOC officiel', key=f'v286_boc_{ticker}'):
+        try:
+            st.session_state[f'v286_price_{ticker}'] = get_official_market_price(ticker)
+        except Exception as exc:
+            st.session_state.pop(f'v286_price_{ticker}',None)
+            st.warning(f'Extraction automatique du cours indisponible : {exc}')
+    market=st.session_state.get(f'v286_price_{ticker}')
+    price=None
+    if market:
+        st.success(f"Clôture {ticker} : {market['price_xof']:,} FCFA — séance du {market['date']} — page PDF {market['pdf_page']}")
+        st.link_button('Consulter le BOC officiel',market['url'])
+        price=market['price_xof']
+    default_reports={'SMBC':'https://www.brvm.org/sites/default/files/20260430_-_etats_financiers_-_exercice_2025_-_smb_ci.pdf', 'BOAB':'https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf'}
+    issuer_url=st.text_input('Rapport officiel pour recherche automatique du nombre d’actions',value=default_reports.get(ticker,''),key=f'v286_issuer_{ticker}')
+    if st.button('Extraire le nombre d’actions du rapport officiel',key=f'v286_shares_btn_{ticker}'):
+        try:
+            if not issuer_url.lower().endswith('.pdf'):raise OfficialSourceError('URL PDF officielle requise.')
+            result=extract_shares_from_issuer_pdf(_fetch(issuer_url))
+            result['url']=issuer_url
+            st.session_state[f'v286_shares_{ticker}']=result
+        except Exception as exc:
+            st.session_state.pop(f'v286_shares_{ticker}',None)
+            st.warning(f'Nombre d’actions non confirmé : {exc}')
+    shares_ref=st.session_state.get(f'v286_shares_{ticker}')
+    if shares_ref:
+        shares=shares_ref['shares']
+        shares_source=f"{shares_ref['url']} — page {shares_ref['pdf_page']}"
+        st.success(f"Nombre d’actions identifié : {shares:,} — page {shares_ref['pdf_page']}")
+        st.caption(f"Justificatif extrait : {shares_ref['evidence']}")
+    else:
+        st.info('Nombre d’actions indisponible : BPA, PER et PBR suspendus. Fournir une URL officielle de rapport pour extraction automatique, sans saisie de montant.')
         return
-    if price > 0 and (price_date is None or not price_source.strip()):
-        st.warning('Cours sans date ou sans source : PER et PBR désactivés.')
-        price = 0
+    if not market:
+        st.info('Cours officiel indisponible : calcul du BPA et du ROE possible, PER et PBR suspendus.')
+    confirmed=st.checkbox('J’ai contrôlé la concordance entre le rapport de l’émetteur et les actions en circulation.',key=f'v286_confirm_{ticker}')
+    if not confirmed:
+        st.info('Confirmer le justificatif du nombre d’actions pour activer les calculs.')
+        return
+    price_date=market['date'] if market else None
+    price_source=market['url'] if market else ''
     try:
         metrics = calculate_annual_metrics(ref['annual'], ref.get('equity'), ref.get('prior_equity'), shares, price or None)
     except ValueError as exc:
@@ -75,6 +106,18 @@ def render_annual_valuation(st, ticker):
         return
     st.dataframe(pd.DataFrame([{'Indicateur': k, 'Valeur': round(v, 4)} for k,v in metrics.items()]), hide_index=True, use_container_width=True)
     st.caption('PER annuel : cours / BPA annuel. PBR : cours / valeur comptable par action. ROE : résultat net / capitaux propres moyens. Comparer uniquement avec des sociétés du même secteur.')
+    from brvm_scoring_v286 import preliminary_score
+    prior_net=ref.get('previous')
+    growth=100*(ref['annual']/prior_net-1) if prior_net and prior_net>0 else None
+    equity_growth=100*(ref['equity']/ref['prior_equity']-1) if ref.get('equity') and ref.get('prior_equity') else None
+    preliminary=preliminary_score(roe=metrics.get('ROE annuel (%)'),net_growth=growth,per=metrics.get('PER annuel (x)'),pbr=metrics.get('PBR annuel (x)'),equity_growth=equity_growth)
+    st.markdown('#### Scoring financier exploratoire V2.8.6')
+    st.dataframe(pd.DataFrame(preliminary['details']),hide_index=True,use_container_width=True)
+    if preliminary['score_100'] is None:
+        st.info(f"Score incomplet : {preliminary['points_observed']} points observés sur {preliminary['maximum_observed']} possibles. Aucune note /100 attribuée.")
+    else:
+        st.metric('Score exploratoire /100',preliminary['score_100'])
+    st.caption('Barème expérimental non calibré par secteur : ne pas utiliser comme recommandation ou BRVM Opportunity Score définitif.')
     st.markdown('**Scénario facultatif de capitalisation des bénéfices**')
     st.caption('Modèle simplifié de bénéfice perpétuel croissant, non assimilable à une valorisation DCF complète. Les hypothèses ne sont pas fournies par PostgreSQL.')
     with st.expander('Saisir les hypothèses et calculer une valeur indicative'):

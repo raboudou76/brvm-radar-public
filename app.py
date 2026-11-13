@@ -18,6 +18,7 @@ from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
 from brvm_radar_postgres_v281 import render_page as render_validated_financials
 from brvm_radar_sync_v284 import render_synced_panel, render_valuation_reference, get_valuation_prefill
+from brvm_radar_valuation_v285 import render_annual_valuation
 
 BASE='https://www.brvm.org'
 MARKET=BASE+'/fr/cours-actions/0'
@@ -224,7 +225,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.4 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.5 — Valorisation, dividendes et fonds propres')
     st.caption('SMB : capitaux propres préremplis depuis les états financiers 2025. Dividende net affiché par défaut pour une personne physique ; fiscalité ajustable.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -256,6 +257,8 @@ elif menu=='Valorisation et dividendes':
         st.info('Clique sur « Rechercher » pour récupérer les références validées de cette société.')
     if st.session_state.get('v284_last_prefill'):
         st.caption('Dernier préremplissage : ' + st.session_state['v284_last_prefill'])
+
+    render_annual_valuation(st, ticker_pg)
 
     if is_smb:
         st.info('Référence SMB : capitaux propres 2025 = 42 913 millions FCFA ; 2024 = 35 294 millions FCFA. Les dividendes doivent être rapprochés de l’avis officiel de distribution.')

@@ -48,39 +48,43 @@ def latest_official_boc():
 def _num(s):
     return int(re.sub(r'[\s\u00a0\u202f]','',s))
 
-def extract_close_from_pdf(pdf_bytes,ticker):
-    """Only use an unambiguous ticker row in the daily equity quotation tables.
-    Layout text is required; if PDF layout changes, fail closed.
+def extract_close_from_pdf(pdf_bytes, ticker):
+    """Read BRVM equity close using PDF word geometry and the Clôt. column.
+
+    Only accepts a ticker row under a header explicitly labelled Clôt.;
+    never substitutes previous, opening, reference price or traded volume.
     """
-    ticker=ticker.upper().strip()
-    if not re.fullmatch(r'[A-Z]{3,6}',ticker):raise OfficialSourceError('Ticker invalide.')
-    doc=fitz.open(stream=pdf_bytes,filetype='pdf')
-    results=[]
-    for page_index in range(min(5,len(doc))):
-        page=doc[page_index]
-        words=page.get_text('words')
-        rows={}
-        for w in words:
-            x0,y0,x1,y1,token,*_=w
-            key=round((y0+y1)/2/3)*3
-            rows.setdefault(key,[]).append((x0,str(token)))
-        for row in rows.values():
-            row.sort(key=lambda item:item[0])
-            tokens=[w for _,w in row]
-            if ticker not in tokens:continue
-            pos=tokens.index(ticker)
-            tail=' '.join(tokens[pos+1:])
-            # The first numeric columns after the company name are previous/open/close.
-            # Require a daily variation percentage to distinguish other tables.
-            m=re.search(r'(\d[\d ]{0,10})\s+(\d[\d ]{0,10}|SP|NC)\s+(\d[\d ]{0,10}|SP|NC)\s+[-+]?\d+[,.]\d+\s*%',tail)
-            if m and m.group(3) not in ('SP','NC'):
-                try:
-                    price=_num(m.group(3))
-                    if 1<=price<=5_000_000:results.append((price,page_index+1,' '.join(tokens)))
-                except ValueError:pass
-    if len(results)!=1:
+    ticker = ticker.upper().strip()
+    if not re.fullmatch(r'[A-Z]{3,6}', ticker):
+        raise OfficialSourceError('Ticker invalide.')
+    doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+    results = []
+    for page_index, page in enumerate(doc):
+        words = page.get_text('words')
+        headers = [w for w in words if w[4].lower().strip() in ('clôt.', 'clot.', 'clôture')]
+        if not headers:
+            continue
+        for header in headers:
+            hx = (header[0] + header[2]) / 2
+            for target in (w for w in words if w[4].upper() == ticker and w[1] > header[3]):
+                cy = (target[1] + target[3]) / 2
+                # Ignore unrelated table sections or page headings.
+                row = [w for w in words if abs((w[1] + w[3]) / 2 - cy) < 3.0]
+                # The closing-price cell is located directly below Clôt.,
+                # with its numeric groups positioned around the header center.
+                cell = sorted([w for w in row if hx - 10 <= (w[0]+w[2])/2 <= hx + 17], key=lambda w:w[0])
+                raw = ''.join(w[4] for w in cell).replace('\u202f','').replace('\xa0','')
+                if not re.fullmatch(r'\d{1,7}', raw):
+                    continue
+                price = int(raw)
+                if not 1 <= price <= 5_000_000:
+                    continue
+                results.append((price, page_index + 1, ' '.join(w[4] for w in sorted(row,key=lambda w:w[0]))))
+    # Deduplicate overlapping headers on the same page/row.
+    results = list(dict.fromkeys(results))
+    if len(results) != 1:
         raise OfficialSourceError(f'Clôture {ticker} non déterminable sans ambiguïté dans le PDF ({len(results)} lignes). Vérifier la mise en page.')
-    price,page,raw=results[0]
+    price, page, raw = results[0]
     return {'ticker':ticker,'price_xof':price,'pdf_page':page,'raw_row':raw}
 
 def get_official_market_price(ticker):

@@ -122,7 +122,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V2.8.1 — Data Engine')
+st.sidebar.caption('Investment Intelligence · V2.8.6.2 — Data Engine')
 menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -232,6 +232,10 @@ elif menu=='Valorisation et dividendes':
     ref=SMB_REFERENCE if is_smb else {}
     render_valuation_reference(st, 'SMBC' if is_smb else soc.strip().upper())
     ticker_pg = 'SMBC' if is_smb else soc.strip().upper()
+    if st.session_state.get('v286_form_ticker') != ticker_pg:
+        for k in ('v286_main_price','v286_main_shares','v286_main_date','v286_main_price_date','v286_main_price_source','v286_main_shares_source','v286_main_ticker'):
+            st.session_state.pop(k, None)
+        st.session_state['v286_form_ticker'] = ticker_pg
     st.markdown('### V2.8.4 — Préremplissage contrôlé depuis PostgreSQL')
     st.caption('Les données annuelles VALIDATED sont récupérées en lecture seule. Les cours, actions, TTM, dividendes et hypothèses restent à renseigner ou confirmer séparément.')
     if st.button('Rechercher les données financières validées', key='v284_rechercher'):
@@ -259,6 +263,20 @@ elif menu=='Valorisation et dividendes':
         st.caption('Dernier préremplissage : ' + st.session_state['v284_last_prefill'])
 
     render_annual_valuation(st, ticker_pg)
+    # Appliquer les valeurs documentées avant la création des widgets Streamlit.
+    if st.session_state.get('v286_apply_pending') == ticker_pg:
+        st.session_state['v286_apply_pending'] = None
+        market = st.session_state.get(f'v286_price_{ticker_pg}')
+        shares_data = st.session_state.get(f'v286_shares_{ticker_pg}')
+        if market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
+            st.session_state['v286_main_price'] = float(market['price_xof'])
+            st.session_state['v286_main_shares'] = int(shares_data['shares'])
+            st.session_state['v286_main_price_date'] = str(market['date'])
+            st.session_state['v286_main_date'] = datetime.fromisoformat(str(market['date'])).date()
+            st.session_state['v286_main_price_source'] = str(market['url'])
+            st.session_state['v286_main_shares_source'] = str(shares_data['url']) + ' — page ' + str(shares_data['pdf_page'])
+            st.session_state['v286_main_ticker'] = ticker_pg
+            st.success('Cours et nombre d’actions reportés dans les champs de valorisation ci-dessous.')
 
     if is_smb:
         st.info('Référence SMB : capitaux propres 2025 = 42 913 millions FCFA ; 2024 = 35 294 millions FCFA. Les dividendes doivent être rapprochés de l’avis officiel de distribution.')
@@ -272,9 +290,9 @@ elif menu=='Valorisation et dividendes':
         except Exception as exc: st.warning(f'Extraction PDF impossible : {exc}')
     a,b=st.columns(2)
     with a:
-        price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0)
-        date=st.date_input('Date du cours') if price>0 else None
-        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=1,value=ref.get('shares',1000000),step=100)
+        price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0,key='v286_main_price')
+        date=st.date_input('Date du cours', value=datetime.fromisoformat(st.session_state['v286_main_price_date']).date() if st.session_state.get('v286_main_ticker') == ticker_pg and st.session_state.get('v286_main_price_date') else 'today', key='v286_main_date') if price>0 else None
+        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=1,value=int(ref.get('shares',1000000)),step=100,key='v286_main_shares')
         ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key='v284_ttm')
         annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=float(ref.get('net_income_m',0.0)),step=1.0,key='v284_annual')
         previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0,key='v284_previous')
@@ -289,6 +307,9 @@ elif menu=='Valorisation et dividendes':
         if profile.startswith('Autre'): st.warning('Le taux initial de 0 % n’est pas une présomption d’exonération. Renseignez le taux applicable avant utilisation.')
         source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''))
         dividend_source=st.text_input('Source du dividende / avis de paiement',value=ref.get('dividend_source',''))
+    if st.session_state.get('v286_main_ticker') == ticker_pg:
+        st.caption('Source officielle du cours : ' + st.session_state.get('v286_main_price_source','Non disponible'))
+        st.caption('Source officielle du nombre d’actions : ' + st.session_state.get('v286_main_shares_source','Non disponible'))
     st.caption('Le dividende net est utilisé pour le rendement net ; le dividende brut est utilisé pour le taux de distribution. Le taux IRVM dépend de la qualité et de la résidence fiscale de l’investisseur.')
     st.markdown('### Historique des dividendes — cinq ans')
     st.caption('Importer un CSV avec Année et Dividende brut (FCFA/action) ; facultativement Dividende net ou IRVM (%). Aucun historique n’est inventé si les avis de paiement manquent.')

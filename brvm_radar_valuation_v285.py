@@ -34,12 +34,38 @@ def earnings_capitalization(eps, required_return, growth):
 
 
 def render_annual_valuation(st, ticker):
-    st.markdown('### V2.8.6.2 — Ratios et sources officielles automatisées')
+    st.markdown('### V2.8.6.3 — Sources officielles et ratios annuels')
     st.caption('Données annuelles VALIDATED uniquement. Le BPA et le PER annuels ne remplacent pas le BPA/PER TTM. Aucune donnée de marché n’est inventée.')
     if st.button('Charger les références annuelles V2.8.5', key='v285_load'):
         st.session_state['v285_reference'] = get_valuation_prefill(st, ticker)
         st.session_state['v285_ticker'] = ticker
     ref = st.session_state.get('v285_reference') if st.session_state.get('v285_ticker') == ticker else None
+    from brvm_market_v286 import get_official_market_price, extract_shares_from_issuer_pdf, _fetch, OfficialSourceError
+    st.markdown('#### V2.8.6 — Sources officielles automatiques')
+    st.caption('Le cours est extrait du dernier BOC PDF accessible. Le nombre d’actions doit être identifié dans un rapport officiel de l’émetteur ; le volume échangé n’est jamais utilisé.')
+    if st.button('Actualiser le dernier BOC officiel', key=f'v286_boc_{ticker}'):
+        try:
+            st.session_state[f'v286_price_{ticker}'] = get_official_market_price(ticker)
+        except Exception as exc:
+            st.session_state.pop(f'v286_price_{ticker}',None)
+            st.warning(f'Extraction automatique du cours indisponible : {exc}')
+    market=st.session_state.get(f'v286_price_{ticker}')
+    price=None
+    if market:
+        st.success(f"Clôture {ticker} : {market['price_xof']:,} FCFA — séance du {market['date']} — page PDF {market['pdf_page']}")
+        st.link_button('Consulter le BOC officiel',market['url'])
+        price=market['price_xof']
+    default_reports={'SMBC':'https://www.brvm.org/sites/default/files/20260512_-_etats_financiers_et_projet_daffectation_du_resultat_-_exercice_2025_-_smb_ci.pdf', 'BOAB':'https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf'}
+    issuer_url=st.text_input('Rapport officiel pour recherche automatique du nombre d’actions',value=default_reports.get(ticker,''),key=f'v286_issuer_{ticker}')
+    if st.button('Extraire le nombre d’actions du rapport officiel',key=f'v286_shares_btn_{ticker}'):
+        try:
+            if not issuer_url.lower().endswith('.pdf'):raise OfficialSourceError('URL PDF officielle requise.')
+            result=extract_shares_from_issuer_pdf(_fetch(issuer_url))
+            result['url']=issuer_url
+            st.session_state[f'v286_shares_{ticker}']=result
+        except Exception as exc:
+            st.session_state.pop(f'v286_shares_{ticker}',None)
+            st.warning(f'Nombre d’actions non confirmé : {exc}')
     if not ref:
         st.info('Clique sur « Charger les références annuelles V2.8.5 » pour consulter les chiffres validés de cette société.')
         return
@@ -56,32 +82,7 @@ def render_annual_valuation(st, ticker):
         st.warning('Au moins un montant est arrondi au million FCFA. Les ratios calculés sont approximatifs.')
     if any(v == 'EXACT_OR_UNSPECIFIED' for v in ref['precision'].values()):
         st.info('Précision exacte non attestée pour certains montants : vérifier la documentation.')
-    from brvm_market_v286 import get_official_market_price, extract_shares_from_issuer_pdf, _fetch, OfficialSourceError
-    st.markdown('#### V2.8.6 — Sources officielles automatiques')
-    st.caption('Le cours est extrait du dernier BOC PDF accessible. Le nombre d’actions doit être identifié dans un rapport officiel de l’émetteur ; le volume échangé n’est jamais utilisé.')
-    if st.button('Actualiser le dernier BOC officiel', key=f'v286_boc_{ticker}'):
-        try:
-            st.session_state[f'v286_price_{ticker}'] = get_official_market_price(ticker)
-        except Exception as exc:
-            st.session_state.pop(f'v286_price_{ticker}',None)
-            st.warning(f'Extraction automatique du cours indisponible : {exc}')
-    market=st.session_state.get(f'v286_price_{ticker}')
-    price=None
-    if market:
-        st.success(f"Clôture {ticker} : {market['price_xof']:,} FCFA — séance du {market['date']} — page PDF {market['pdf_page']}")
-        st.link_button('Consulter le BOC officiel',market['url'])
-        price=market['price_xof']
-    default_reports={'SMBC':'https://www.brvm.org/sites/default/files/20260430_-_etats_financiers_-_exercice_2025_-_smb_ci.pdf', 'BOAB':'https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf'}
-    issuer_url=st.text_input('Rapport officiel pour recherche automatique du nombre d’actions',value=default_reports.get(ticker,''),key=f'v286_issuer_{ticker}')
-    if st.button('Extraire le nombre d’actions du rapport officiel',key=f'v286_shares_btn_{ticker}'):
-        try:
-            if not issuer_url.lower().endswith('.pdf'):raise OfficialSourceError('URL PDF officielle requise.')
-            result=extract_shares_from_issuer_pdf(_fetch(issuer_url))
-            result['url']=issuer_url
-            st.session_state[f'v286_shares_{ticker}']=result
-        except Exception as exc:
-            st.session_state.pop(f'v286_shares_{ticker}',None)
-            st.warning(f'Nombre d’actions non confirmé : {exc}')
+
     shares_ref=st.session_state.get(f'v286_shares_{ticker}')
     if shares_ref:
         shares=shares_ref['shares']
@@ -139,6 +140,6 @@ def render_annual_valuation(st, ticker):
                 except ValueError as exc:
                     st.error(str(exc))
     export = pd.DataFrame([{'Société': ticker, 'Exercice': ref['year'], 'Actions': shares, 'Source actions': shares_source,
-                            'Cours': price if price > 0 else None, 'Date cours': str(price_date) if price_date else None,
+                            'Cours': price if price is not None and price > 0 else None, 'Date cours': str(price_date) if price_date else None,
                             'Source cours': price_source, 'Précision résultat net': ref['precision'].get('Résultat net'), **metrics}])
     st.download_button('Exporter les ratios annuels (CSV)', export.to_csv(index=False, sep=';').encode('utf-8-sig'), f'ratios_annuels_{ticker}_v285.csv', 'text/csv', key=f'v285_export_{ticker}')

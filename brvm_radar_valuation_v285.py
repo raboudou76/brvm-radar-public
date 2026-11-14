@@ -34,7 +34,7 @@ def earnings_capitalization(eps, required_return, growth):
 
 
 def render_annual_valuation(st, ticker):
-    st.markdown('### V2.8.6 — Ratios et sources officielles automatisées')
+    st.markdown('### V2.8.6.2 — Ratios et sources officielles automatisées')
     st.caption('Données annuelles VALIDATED uniquement. Le BPA et le PER annuels ne remplacent pas le BPA/PER TTM. Aucune donnée de marché n’est inventée.')
     if st.button('Charger les références annuelles V2.8.5', key='v285_load'):
         st.session_state['v285_reference'] = get_valuation_prefill(st, ticker)
@@ -97,6 +97,10 @@ def render_annual_valuation(st, ticker):
     if not confirmed:
         st.info('Confirmer le justificatif du nombre d’actions pour activer les calculs.')
         return
+    if market and shares_ref:
+        if st.button('Reporter le cours et les actions dans la valorisation', key=f'v286_apply_{ticker}'):
+            st.session_state['v286_apply_pending'] = ticker
+            st.rerun()
     price_date=market['date'] if market else None
     price_source=market['url'] if market else ''
     try:

@@ -34,7 +34,7 @@ def earnings_capitalization(eps, required_return, growth):
 
 
 def render_annual_valuation(st, ticker):
-    st.markdown('### V2.8.6.3 — Sources officielles et ratios annuels')
+    st.markdown('### V2.8.6.5 — Sources officielles et ratios annuels')
     st.caption('Données annuelles VALIDATED uniquement. Le BPA et le PER annuels ne remplacent pas le BPA/PER TTM. Aucune donnée de marché n’est inventée.')
     if st.button('Charger les références annuelles V2.8.5', key='v285_load'):
         st.session_state['v285_reference'] = get_valuation_prefill(st, ticker)
@@ -66,6 +66,18 @@ def render_annual_valuation(st, ticker):
         except Exception as exc:
             st.session_state.pop(f'v286_shares_{ticker}',None)
             st.warning(f'Nombre d’actions non confirmé : {exc}')
+    st.markdown('#### V2.8.6.5 — Actions publiées sur la fiche BRVM')
+    default_profiles = {'SMBC': 'https://www.brvm.org/fr/emetteurs/societes-cotees/societe-multinationale-de-bitume-de-cote-divoire-smb'}
+    profile_url = st.text_input('Fiche officielle BRVM de la société', value=default_profiles.get(ticker, ''), key=f'v2865_profile_{ticker}')
+    if st.button('Extraire les actions de la fiche BRVM', key=f'v2865_extract_{ticker}'):
+        try:
+            from brvm_issuer_v2865 import get_official_shares
+            result = get_official_shares(ticker, profile_url)
+            st.session_state[f'v286_shares_{ticker}'] = result
+            st.session_state[f'v286_confirm_{ticker}'] = False
+        except Exception as exc:
+            st.session_state.pop(f'v286_shares_{ticker}', None)
+            st.warning(f'Extraction de la fiche BRVM impossible : {exc}')
     if not ref:
         st.info('Clique sur « Charger les références annuelles V2.8.5 » pour consulter les chiffres validés de cette société.')
         return
@@ -86,15 +98,17 @@ def render_annual_valuation(st, ticker):
     shares_ref=st.session_state.get(f'v286_shares_{ticker}')
     if shares_ref:
         shares=shares_ref['shares']
-        shares_source=f"{shares_ref['url']} — page {shares_ref['pdf_page']}"
-        st.success(f"Nombre d’actions identifié : {shares:,} — page {shares_ref['pdf_page']}")
+        shares_source=f"{shares_ref['url']} — {('page ' + str(shares_ref['pdf_page'])) if shares_ref.get('pdf_page') else ('référence ' + shares_ref.get('reference_date','non précisée'))}"
+        st.success(f"Nombre d’actions identifié : {shares:,} — {('page PDF ' + str(shares_ref['pdf_page'])) if shares_ref.get('pdf_page') else ('fiche BRVM au ' + shares_ref.get('reference_date','date inconnue'))}")
+        if shares_ref.get('validation_status') == 'OFFICIAL_HISTORICAL':
+            st.warning('Donnée officielle historique : vérifier les opérations sur capital depuis cette date avant de confirmer son actualité.')
         st.caption(f"Justificatif extrait : {shares_ref['evidence']}")
     else:
         st.info('Nombre d’actions indisponible : BPA, PER et PBR suspendus. Fournir une URL officielle de rapport pour extraction automatique, sans saisie de montant.')
         return
     if not market:
         st.info('Cours officiel indisponible : calcul du BPA et du ROE possible, PER et PBR suspendus.')
-    confirmed=st.checkbox('J’ai contrôlé la concordance entre le rapport de l’émetteur et les actions en circulation.',key=f'v286_confirm_{ticker}')
+    confirmed=st.checkbox('J’ai vérifié les opérations sur capital depuis la date de référence et confirmé le nombre d’actions applicable.',key=f'v286_confirm_{ticker}')
     if not confirmed:
         st.info('Confirmer le justificatif du nombre d’actions pour activer les calculs.')
         return

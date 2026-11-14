@@ -42,7 +42,7 @@ def render_annual_valuation(st, ticker):
     ref = st.session_state.get('v285_reference') if st.session_state.get('v285_ticker') == ticker else None
     from brvm_market_v286 import get_official_market_price, extract_shares_from_issuer_pdf, _fetch, OfficialSourceError
     st.markdown('#### V2.8.6 — Sources officielles automatiques')
-    st.caption('Le cours est extrait du dernier BOC PDF accessible. Le nombre d’actions doit être identifié dans un rapport officiel de l’émetteur ; le volume échangé n’est jamais utilisé.')
+    st.caption('Cours : BOC officiel. Actions : fiche émetteur BRVM en priorité, rapport PDF en secours. Le volume échangé n’est jamais utilisé comme nombre d’actions.')
     if st.button('Actualiser le dernier BOC officiel', key=f'v286_boc_{ticker}'):
         try:
             st.session_state[f'v286_price_{ticker}'] = get_official_market_price(ticker)
@@ -55,29 +55,36 @@ def render_annual_valuation(st, ticker):
         st.success(f"Clôture {ticker} : {market['price_xof']:,} FCFA — séance du {market['date']} — page PDF {market['pdf_page']}")
         st.link_button('Consulter le BOC officiel',market['url'])
         price=market['price_xof']
-    default_reports={'SMBC':'https://www.brvm.org/sites/default/files/20260512_-_etats_financiers_et_projet_daffectation_du_resultat_-_exercice_2025_-_smb_ci.pdf', 'BOAB':'https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf'}
-    issuer_url=st.text_input('Rapport officiel pour recherche automatique du nombre d’actions',value=default_reports.get(ticker,''),key=f'v286_issuer_{ticker}')
-    if st.button('Extraire le nombre d’actions du rapport officiel',key=f'v286_shares_btn_{ticker}'):
-        try:
-            if not issuer_url.lower().endswith('.pdf'):raise OfficialSourceError('URL PDF officielle requise.')
-            result=extract_shares_from_issuer_pdf(_fetch(issuer_url))
-            result['url']=issuer_url
-            st.session_state[f'v286_shares_{ticker}']=result
-        except Exception as exc:
-            st.session_state.pop(f'v286_shares_{ticker}',None)
-            st.warning(f'Nombre d’actions non confirmé : {exc}')
-    st.markdown('#### V2.8.6.5 — Actions publiées sur la fiche BRVM')
+    st.markdown('#### V2.8.6.5 — Nombre d’actions : fiche officielle BRVM (prioritaire)')
+    st.caption('La fiche émetteur BRVM est consultée en priorité. La date de référence est conservée pour éviter de présenter une donnée historique comme actuelle.')
     default_profiles = {'SMBC': 'https://www.brvm.org/fr/emetteurs/societes-cotees/societe-multinationale-de-bitume-de-cote-divoire-smb'}
     profile_url = st.text_input('Fiche officielle BRVM de la société', value=default_profiles.get(ticker, ''), key=f'v2865_profile_{ticker}')
-    if st.button('Extraire les actions de la fiche BRVM', key=f'v2865_extract_{ticker}'):
+    if st.button('Actualiser le nombre d’actions depuis la BRVM', key=f'v2865_extract_{ticker}'):
         try:
             from brvm_issuer_v2865 import get_official_shares
             result = get_official_shares(ticker, profile_url)
             st.session_state[f'v286_shares_{ticker}'] = result
             st.session_state[f'v286_confirm_{ticker}'] = False
+            st.success('Nombre d’actions extrait de la fiche BRVM.')
         except Exception as exc:
-            st.session_state.pop(f'v286_shares_{ticker}', None)
-            st.warning(f'Extraction de la fiche BRVM impossible : {exc}')
+            st.warning(f'Extraction de la fiche BRVM indisponible : {exc}. Les données déjà chargées sont conservées.')
+    with st.expander('Méthode secondaire : rechercher le nombre d’actions dans un rapport PDF officiel'):
+        st.caption('Cette méthode peut échouer lorsque le rapport ne mentionne pas explicitement le nombre d’actions. Elle ne remplace pas une extraction BRVM réussie.')
+        default_reports = {'SMBC':'https://www.brvm.org/sites/default/files/20260512_-_etats_financiers_et_projet_daffectation_du_resultat_-_exercice_2025_-_smb_ci.pdf', 'BOAB':'https://www.brvm.org/sites/default/files/20260415_-_etats_financiers_-_exercice_2025_-_boa_bn.pdf'}
+        issuer_url = st.text_input('URL du rapport PDF officiel', value=default_reports.get(ticker, ''), key=f'v286_issuer_{ticker}')
+        if st.button('Rechercher dans le rapport PDF', key=f'v286_shares_btn_{ticker}'):
+            try:
+                if not issuer_url.lower().endswith('.pdf'):
+                    raise OfficialSourceError('URL PDF officielle requise.')
+                result = extract_shares_from_issuer_pdf(_fetch(issuer_url))
+                result['url'] = issuer_url
+                if st.session_state.get(f'v286_shares_{ticker}', {}).get('source_type') == 'BRVM_ISSUER_PROFILE':
+                    st.info('La fiche BRVM est déjà chargée : son nombre d’actions est conservé en priorité.')
+                else:
+                    st.session_state[f'v286_shares_{ticker}'] = result
+                    st.session_state[f'v286_confirm_{ticker}'] = False
+            except Exception as exc:
+                st.warning(f'Extraction PDF non concluante : {exc}. Les données déjà chargées sont conservées.')
     if not ref:
         st.info('Clique sur « Charger les références annuelles V2.8.5 » pour consulter les chiffres validés de cette société.')
         return
@@ -104,7 +111,7 @@ def render_annual_valuation(st, ticker):
             st.warning('Donnée officielle historique : vérifier les opérations sur capital depuis cette date avant de confirmer son actualité.')
         st.caption(f"Justificatif extrait : {shares_ref['evidence']}")
     else:
-        st.info('Nombre d’actions indisponible : BPA, PER et PBR suspendus. Fournir une URL officielle de rapport pour extraction automatique, sans saisie de montant.')
+        st.info('Nombre d’actions indisponible : utilise d’abord « Actualiser le nombre d’actions depuis la BRVM ». Les ratios restent suspendus tant que la source n’est pas confirmée.')
         return
     if not market:
         st.info('Cours officiel indisponible : calcul du BPA et du ROE possible, PER et PBR suspendus.')

@@ -233,6 +233,7 @@ elif menu=='Valorisation et dividendes':
     render_valuation_reference(st, 'SMBC' if is_smb else soc.strip().upper())
     ticker_pg = 'SMBC' if is_smb else soc.strip().upper()
     if st.session_state.get('v286_form_ticker') != ticker_pg:
+        st.session_state.pop('v286_apply_pending', None)
         for k in ('v286_main_price','v286_main_shares','v286_main_date','v286_main_price_date','v286_main_price_source','v286_main_shares_source','v286_main_ticker'):
             st.session_state.pop(k, None)
         st.session_state['v286_form_ticker'] = ticker_pg
@@ -274,7 +275,16 @@ elif menu=='Valorisation et dividendes':
             st.session_state['v286_main_price_date'] = str(market['date'])
             st.session_state['v286_main_date'] = datetime.fromisoformat(str(market['date'])).date()
             st.session_state['v286_main_price_source'] = str(market['url'])
-            st.session_state['v286_main_shares_source'] = str(shares_data['url']) + ' — page ' + str(shares_data['pdf_page'])
+            # Une fiche HTML BRVM fournit une date de référence, pas de page PDF.
+            # Ne jamais accéder directement à shares_data['pdf_page'].
+            shares_url = str(shares_data.get('url') or '')
+            if shares_data.get('pdf_page') is not None:
+                shares_provenance = f"{shares_url} — page PDF {shares_data['pdf_page']}"
+            elif shares_data.get('reference_date'):
+                shares_provenance = f"{shares_url} — référence {shares_data['reference_date']}"
+            else:
+                shares_provenance = shares_url + ' — date de référence non précisée'
+            st.session_state['v286_main_shares_source'] = shares_provenance
             st.session_state['v286_main_ticker'] = ticker_pg
             st.success('Cours et nombre d’actions reportés dans les champs de valorisation ci-dessous.')
 

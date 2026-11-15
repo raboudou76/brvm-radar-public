@@ -226,7 +226,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.8 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8.2 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -396,9 +396,13 @@ elif menu=='Valorisation et dividendes':
         investor_type = 'physical' if profile == 'Personne physique' else 'legal'
         suggested_rate = rate_for(ticker_pg, investor_type)
         ref_div = reference_for(ticker_pg)
-        if ref_div and st.session_state.get(valuation_key('div_init')) is None:
-            st.session_state[valuation_key('official_net')] = float(ref_div['net'])
-            st.session_state[valuation_key('div_init')] = True
+        # V2.8.8.2 : Streamlit peut supprimer l'état d'un widget lorsqu'on
+        # quitte cette page, tout en conservant notre ancien indicateur div_init.
+        # Réamorcer uniquement si la clé du champ n'existe plus. Ne jamais
+        # écraser une saisie manuelle présente (y compris une valeur de zéro).
+        dividend_widget_key = valuation_key('official_net')
+        if ref_div and dividend_widget_key not in st.session_state:
+            st.session_state[dividend_widget_key] = float(ref_div['net'])
         official_net=st.number_input(
             'Dividende net publié (FCFA/action ; 0 si non disponible)',
             min_value=0.0, value=0.0, step=1.0,

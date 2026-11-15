@@ -225,7 +225,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.7.4 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.7.5 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -267,7 +267,46 @@ elif menu=='Valorisation et dividendes':
     if st.session_state.get('v284_last_prefill'):
         st.caption('Dernier préremplissage : ' + st.session_state['v284_last_prefill'])
 
+    # V2.8.7.5 — référentiel des fiches émetteurs, invisible pour l'investisseur.
+    # Les URLs sont maintenues dans le code et non demandées au client.
+    BRVM_ISSUER_PROFILES = {
+        'SMBC': 'https://www.brvm.org/fr/emetteurs/societes-cotees/societe-multinationale-de-bitume-de-cote-divoire-smb',
+        'BOAB': 'https://www.brvm.org/fr/emetteurs/societes-cotees/bank-africa-benin',
+    }
+    profile_key = f'v2865_profile_{ticker_pg}'
+    if ticker_pg in BRVM_ISSUER_PROFILES and not str(st.session_state.get(profile_key) or '').strip():
+        st.session_state[profile_key] = BRVM_ISSUER_PROFILES[ticker_pg]
+
     render_annual_valuation(st, ticker_pg)
+
+    # Le cours est transféré indépendamment de la confirmation des actions.
+    # L'écriture précède la création des widgets number_input ci-dessous.
+    official_market = st.session_state.get(f'v286_price_{ticker_pg}')
+    if isinstance(official_market, dict) and official_market.get('price_xof'):
+        st.session_state[valuation_key('price')] = float(official_market['price_xof'])
+        st.session_state[valuation_key('price_date')] = str(official_market.get('date') or '')
+        st.session_state[valuation_key('price_source')] = str(official_market.get('url') or '')
+        if official_market.get('date'):
+            try:
+                st.session_state[valuation_key('date')] = datetime.fromisoformat(
+                    str(official_market['date'])
+                ).date()
+            except (ValueError, TypeError):
+                pass
+
+    # Une valeur historique n'alimente le formulaire qu'après vérification
+    # explicite des opérations sur capital.
+    official_shares = st.session_state.get(f'v286_shares_{ticker_pg}')
+    if (isinstance(official_shares, dict)
+            and official_shares.get('shares')
+            and st.session_state.get(f'v286_confirm_{ticker_pg}')):
+        st.session_state[valuation_key('shares')] = int(official_shares['shares'])
+        shares_url = str(official_shares.get('url') or '')
+        reference_date = str(official_shares.get('reference_date') or 'non précisée')
+        st.session_state[valuation_key('shares_source')] = (
+            f'{shares_url} — référence {reference_date}'
+        )
+        st.session_state[valuation_key('applied')] = True
     if st.session_state.get(f'v286_shares_{ticker_pg}'):
         item = st.session_state[f'v286_shares_{ticker_pg}']
         st.caption(f"Actions extraites pour {ticker_pg} : {int(item['shares']):,} — référence {item.get('reference_date', 'non précisée')} ; transfert au formulaire soumis à confirmation.")

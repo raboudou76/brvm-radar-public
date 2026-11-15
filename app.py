@@ -225,7 +225,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.7.5 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -237,7 +237,8 @@ elif menu=='Valorisation et dividendes':
     def valuation_key(field):
         return f'v2874_{ticker_pg}_{field}'
 
-    if st.session_state.get('v286_form_ticker') != ticker_pg:
+    company_changed = st.session_state.get('v286_form_ticker') != ticker_pg
+    if company_changed:
         st.session_state.pop('v286_apply_pending', None)
         st.session_state['v286_form_ticker'] = ticker_pg
         st.session_state['v284_last_prefill'] = ''
@@ -246,6 +247,20 @@ elif menu=='Valorisation et dividendes':
     if st.button('Rechercher les données financières validées', key='v284_rechercher'):
         st.session_state['v284_reference'] = get_valuation_prefill(st, ticker_pg)
         st.session_state['v284_reference_ticker'] = ticker_pg
+    # V2.8.8 : charger automatiquement les observations VALIDATED lors
+    # du changement de société, sans réécrire les champs à chaque rerun.
+    if company_changed:
+        try:
+            auto_ref = get_valuation_prefill(st, ticker_pg)
+            if auto_ref:
+                st.session_state['v284_reference'] = auto_ref
+                st.session_state['v284_reference_ticker'] = ticker_pg
+                for field in ('annual', 'previous', 'equity', 'prior_equity'):
+                    if auto_ref.get(field) is not None:
+                        st.session_state[valuation_key(field)] = float(auto_ref[field])
+                st.session_state['v284_last_prefill'] = f'{ticker_pg} — exercice {auto_ref["year"]} (automatique)'
+        except Exception as exc:
+            st.warning(f'Préremplissage automatique indisponible : {exc}')
     reference_pg = st.session_state.get('v284_reference') if st.session_state.get('v284_reference_ticker') == ticker_pg else None
     if reference_pg:
         st.success(f"Données annuelles disponibles : {reference_pg['ticker']} — {reference_pg['year']} et {reference_pg['previous_year']}.")
@@ -294,10 +309,26 @@ elif menu=='Valorisation et dividendes':
             except (ValueError, TypeError):
                 pass
 
+    # V2.8.8 : snapshot BRVM récent documenté pour BOAB.
+    # Ne pas laisser la fiche de 2015 écraser ce nombre plus récent.
+    # Ce snapshot devra être remplacé par un connecteur de capitalisations
+    # avec vérification quotidienne et journal des opérations sur capital.
+    if ticker_pg == 'BOAB':
+        st.session_state[valuation_key('shares')] = 40561048
+        st.session_state[valuation_key('shares_source')] = (
+            'BRVM — capitalisations / avis d’attribution d’actions gratuites 2024 ; '
+            'référence de contrôle 13/11/2026'
+        )
+        st.session_state[valuation_key('applied')] = True
+        st.info('BOAB : 40 561 048 actions (référence BRVM plus récente). '
+                'La fiche émetteur de 2015 affiche 1 007 268 actions et '
+                'ne doit pas remplacer cette référence. '
+                'Actualisation automatisée du capital encore à développer.')
+
     # Une valeur historique n'alimente le formulaire qu'après vérification
     # explicite des opérations sur capital.
     official_shares = st.session_state.get(f'v286_shares_{ticker_pg}')
-    if (isinstance(official_shares, dict)
+    if (ticker_pg != 'BOAB' and isinstance(official_shares, dict)
             and official_shares.get('shares')
             and st.session_state.get(f'v286_confirm_{ticker_pg}')):
         st.session_state[valuation_key('shares')] = int(official_shares['shares'])
@@ -315,7 +346,7 @@ elif menu=='Valorisation et dividendes':
         st.session_state['v286_apply_pending'] = None
         market = st.session_state.get(f'v286_price_{ticker_pg}')
         shares_data = st.session_state.get(f'v286_shares_{ticker_pg}')
-        if market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
+        if ticker_pg != 'BOAB' and market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
             st.session_state[valuation_key('price')] = float(market['price_xof'])
             st.session_state[valuation_key('shares')] = int(shares_data['shares'])
             st.session_state[valuation_key('price_date')] = str(market['date'])

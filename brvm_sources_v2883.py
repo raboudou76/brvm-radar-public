@@ -10,8 +10,8 @@ SHARE_REFERENCES = {
 DIVIDEND_REFERENCES = {
     "BOAB": {"year": 2025, "amount": 585.0, "kind": "NET", "status": "OFFICIAL_NOTICE",
              "url": "https://www.brvm.org/sites/default/files/20260508_-_avis_ndeg121_brvmdg_-_paiement_de_dividendes_exo_2025_-_boab.pdf"},
-    "SMBC": {"year": 2025, "amount": 800.0, "kind": "NET (rubrique BRVM, à rapprocher de l'avis)",
-             "status": "CONFLICT_REVIEW",
+    "SMBC": {"year": 2025, "amount": 800.0, "kind": "ANNONCE_NON_QUALIFIEE",
+             "status": "NOTICE_REVIEWED",
              "url": "https://www.brvm.org/fr/esv/paiement-de-dividendes"},
 }
 def share_reference(ticker):

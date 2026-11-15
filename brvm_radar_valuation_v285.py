@@ -34,7 +34,7 @@ def earnings_capitalization(eps, required_return, growth):
 
 
 def render_annual_valuation(st, ticker):
-    st.markdown('### V2.8.6.5 — Sources officielles et ratios annuels')
+    st.markdown('### V2.8.8.6 — Sources officielles et ratios annuels')
     st.caption('Données annuelles VALIDATED uniquement. Le BPA et le PER annuels ne remplacent pas le BPA/PER TTM. Aucune donnée de marché n’est inventée.')
     if st.button('Charger les références annuelles V2.8.5', key='v285_load'):
         st.session_state['v285_reference'] = get_valuation_prefill(st, ticker)
@@ -102,27 +102,65 @@ def render_annual_valuation(st, ticker):
     if any(v == 'EXACT_OR_UNSPECIFIED' for v in ref['precision'].values()):
         st.info('Précision exacte non attestée pour certains montants : vérifier la documentation.')
 
-    shares_ref=st.session_state.get(f'v286_shares_{ticker}')
-    if shares_ref:
-        shares=shares_ref['shares']
-        shares_source=f"{shares_ref['url']} — {('page ' + str(shares_ref['pdf_page'])) if shares_ref.get('pdf_page') else ('référence ' + shares_ref.get('reference_date','non précisée'))}"
-        st.success(f"Nombre d’actions identifié : {shares:,} — {('page PDF ' + str(shares_ref['pdf_page'])) if shares_ref.get('pdf_page') else ('fiche BRVM au ' + shares_ref.get('reference_date','date inconnue'))}")
-        if shares_ref.get('validation_status') == 'OFFICIAL_HISTORICAL':
-            st.warning('Donnée officielle historique : vérifier les opérations sur capital depuis cette date avant de confirmer son actualité.')
-        st.caption(f"Justificatif extrait : {shares_ref['evidence']}")
-    else:
-        st.info('Nombre d’actions indisponible : utilise d’abord « Actualiser le nombre d’actions depuis la BRVM ». Les ratios restent suspendus tant que la source n’est pas confirmée.')
+    # V2.8.8.6 : la référence extraite est conservée pour audit ; elle ne devient
+    # pas automatiquement la référence de calcul lorsqu'une référence de contrôle
+    # plus récente existe. Aucune vérification réglementaire n'est présumée.
+    extracted_ref = st.session_state.get(f'v286_shares_{ticker}')
+    active_ref = None
+    if ticker == 'BOAB':
+        active_ref = {
+            'shares': 40_561_048,
+            'reference_date': '2024 (opération sur capital ; date exacte à confirmer)',
+            'source': 'Référence de contrôle BRVM — opération sur capital 2024',
+            'validation_status': 'PENDING_DOCUMENT_RECONCILIATION',
+        }
+    elif extracted_ref and extracted_ref.get('shares'):
+        active_ref = {
+            'shares': int(extracted_ref['shares']),
+            'reference_date': extracted_ref.get('reference_date', 'non précisée'),
+            'source': extracted_ref.get('url', 'Extraction BRVM / rapport PDF'),
+            'validation_status': extracted_ref.get('validation_status', 'UNVERIFIED'),
+        }
+
+    if not active_ref:
+        st.info('Aucune référence de capital disponible : charger une source officielle avant de calculer les ratios.')
         return
+
+    shares = active_ref['shares']
+    shares_source = f"{active_ref['source']} — {active_ref['reference_date']}"
+    st.info(f"Référence de calcul {ticker} : {shares:,} actions — {active_ref['reference_date']}. Vérification documentaire requise.")
+    with st.expander('Audit : fiche émetteur historique et extraction du marché', expanded=False):
+        if extracted_ref:
+            st.write(f"Nombre extrait : {int(extracted_ref['shares']):,} actions")
+            st.caption(f"Date : {extracted_ref.get('reference_date', 'inconnue')} ; source : {extracted_ref.get('url', 'non précisée')}")
+            st.caption(f"Justificatif : {extracted_ref.get('evidence', 'non disponible')}")
+            if int(extracted_ref['shares']) != shares:
+                st.warning('Cette référence historique diffère de la référence de calcul et ne la remplace pas.')
+        else:
+            st.caption('Aucune extraction historique chargée pour cette société.')
     if not market:
-        st.info('Cours officiel indisponible : calcul du BPA et du ROE possible, PER et PBR suspendus.')
-    confirmed=st.checkbox('J’ai vérifié les opérations sur capital depuis la date de référence et confirmé le nombre d’actions applicable.',key=f'v286_confirm_{ticker}')
+        st.info('Cours officiel indisponible : BPA et ROE possibles ; PER et PBR suspendus.')
+
+    # Une confirmation précédente ne doit pas valider une référence différente.
+    confirmed_ref_key = f'v2886_confirmed_reference_{ticker}'
+    reference_id = (shares, active_ref['reference_date'], active_ref['source'])
+    if st.session_state.get(confirmed_ref_key) != reference_id:
+        st.session_state[f'v2886_confirm_{ticker}'] = False
+    confirmed = st.checkbox(
+        'Je confirme avoir rapproché cette référence active des opérations sur capital et des justificatifs officiels.',
+        key=f'v2886_confirm_{ticker}',
+    )
     if not confirmed:
-        st.info('Confirmer le justificatif du nombre d’actions pour activer les calculs.')
+        st.info('Ratios suspendus tant que la référence active n’est pas confirmée. La fiche historique ne suffit pas à elle seule.')
         return
-    if market and shares_ref:
+    st.session_state[confirmed_ref_key] = reference_id
+    # Ne jamais transférer une extraction historique BOAB vers le formulaire.
+    if market and extracted_ref and ticker != 'BOAB' and int(extracted_ref['shares']) == shares:
         if st.button('Reporter le cours et les actions dans la valorisation', key=f'v286_apply_{ticker}'):
             st.session_state['v286_apply_pending'] = ticker
             st.rerun()
+    elif ticker == 'BOAB':
+        st.caption('BOAB : transfert depuis la fiche historique désactivé pour protéger la référence active du formulaire.')
     price_date=market['date'] if market else None
     price_source=market['url'] if market else ''
     try:

@@ -234,9 +234,10 @@ elif menu=='Valorisation et dividendes':
     ticker_pg = 'SMBC' if is_smb else soc.strip().upper()
     if st.session_state.get('v286_form_ticker') != ticker_pg:
         st.session_state.pop('v286_apply_pending', None)
-        for k in ('v286_main_price','v286_main_shares','v286_main_date','v286_main_price_date','v286_main_price_source','v286_main_shares_source','v286_main_ticker'):
+        for k in ('v286_main_price','v286_main_shares','v286_main_date','v286_main_price_date','v286_main_price_source','v286_main_shares_source','v286_main_ticker','v284_ttm','v284_annual','v284_previous','v284_equity','v284_prior_equity','v284_last_prefill'):
             st.session_state.pop(k, None)
         st.session_state['v286_form_ticker'] = ticker_pg
+        st.session_state['v284_last_prefill'] = ''
     st.markdown('### V2.8.4 — Préremplissage contrôlé depuis PostgreSQL')
     st.caption('Les données annuelles VALIDATED sont récupérées en lecture seule. Les cours, actions, TTM, dividendes et hypothèses restent à renseigner ou confirmer séparément.')
     if st.button('Rechercher les données financières validées', key='v284_rechercher'):
@@ -264,6 +265,9 @@ elif menu=='Valorisation et dividendes':
         st.caption('Dernier préremplissage : ' + st.session_state['v284_last_prefill'])
 
     render_annual_valuation(st, ticker_pg)
+    if st.session_state.get(f'v286_shares_{ticker_pg}'):
+        item = st.session_state[f'v286_shares_{ticker_pg}']
+        st.caption(f"Actions extraites pour {ticker_pg} : {int(item['shares']):,} — référence {item.get('reference_date', 'non précisée')} ; transfert au formulaire soumis à confirmation.")
     # Appliquer les valeurs documentées avant la création des widgets Streamlit.
     if st.session_state.get('v286_apply_pending') == ticker_pg:
         st.session_state['v286_apply_pending'] = None
@@ -302,7 +306,7 @@ elif menu=='Valorisation et dividendes':
     with a:
         price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0,key='v286_main_price')
         date=st.date_input('Date du cours', value=datetime.fromisoformat(st.session_state['v286_main_price_date']).date() if st.session_state.get('v286_main_ticker') == ticker_pg and st.session_state.get('v286_main_price_date') else 'today', key='v286_main_date') if price>0 else None
-        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=1,value=int(ref.get('shares',1000000)),step=100,key='v286_main_shares')
+        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=0,value=int(ref.get('shares',0)),step=100,key='v286_main_shares',help='0 signifie non renseigné. Ne pas utiliser les actions d’une autre société.')
         ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key='v284_ttm')
         annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=float(ref.get('net_income_m',0.0)),step=1.0,key='v284_annual')
         previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0,key='v284_previous')
@@ -340,6 +344,7 @@ elif menu=='Valorisation et dividendes':
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):
         if not checked: st.error('Veuillez confirmer les données avant calcul.')
+        elif shares <= 0: st.error('Nombre d’actions non renseigné pour cette société.')
         elif ttm <= 0: st.error('Renseigne et vérifie un résultat net TTM positif. Le résultat annuel ne remplace pas automatiquement le TTM.')
         else:
             try:

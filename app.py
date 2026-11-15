@@ -123,7 +123,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V2.8.9 — Data Engine')
+st.sidebar.caption('Investment Intelligence · V2.8.9.1 — Data Engine')
 menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Synchronisation BRVM','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -143,7 +143,7 @@ if menu in ['Dashboard financier','Vue du marché','Radar court terme','Fiche ac
     st.caption(f'Dernière mise à jour indiquée par la source : {updated} · {len(df)} titres récupérés')
 
 if menu=='Synchronisation BRVM':
-    from brvm_sync_v289 import render_sync_panel
+    from brvm_sync_v2891 import render_sync_panel
     render_sync_panel(load_market)
 
 elif menu=='Données validées (PostgreSQL)':
@@ -319,6 +319,22 @@ elif menu=='Valorisation et dividendes':
             render_annual_valuation(st, ticker_pg)
     else:
         render_annual_valuation(st, ticker_pg)
+
+    # V2.8.9.1 : lecture groupée des cours officiels, sans écraser un cours
+    # déjà renseigné. La synchronisation s'effectue au changement de titre.
+    if company_changed:
+        try:
+            from brvm_sync_v2891 import sync_quotes, quote_for
+            sync_quotes(load_market)
+            batch_quote=quote_for(ticker_pg)
+            if batch_quote and float(batch_quote.get('price') or 0)>0:
+                st.session_state.setdefault(f'v286_price_{ticker_pg}', {
+                    'price_xof':float(batch_quote['price']),
+                    'date':batch_quote['source_date'],
+                    'url':batch_quote['url']})
+        except Exception as exc:
+            st.caption(f'Synchronisation groupée indisponible : {exc}. '
+                       'Les cours précédemment mémorisés restent conservés.')
 
     # V2.8.8.7 : dernier cours officiel positif, isolé par émetteur.
     # Une extraction absente ou égale à zéro ne doit jamais effacer un cours connu.

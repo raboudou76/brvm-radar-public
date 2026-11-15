@@ -57,7 +57,7 @@ def render_annual_valuation(st, ticker):
         price=market['price_xof']
     st.markdown('#### V2.8.6.5 — Nombre d’actions : fiche officielle BRVM (prioritaire)')
     st.caption('La fiche émetteur BRVM est consultée en priorité. La date de référence est conservée pour éviter de présenter une donnée historique comme actuelle.')
-    default_profiles = {'SMBC': 'https://www.brvm.org/fr/emetteurs/societes-cotees/societe-multinationale-de-bitume-de-cote-divoire-smb', 'BOAB': 'https://www.brvm.org/fr/emetteurs/societes-cotees/bank-africa-benin'}
+    default_profiles = {'SMBC': 'https://www.brvm.org/fr/emetteurs/societes-cotees/societe-multinationale-de-bitume-de-cote-divoire-smb'}
     profile_url = st.text_input('Fiche officielle BRVM de la société', value=default_profiles.get(ticker, ''), key=f'v2865_profile_{ticker}')
     if st.button('Actualiser le nombre d’actions depuis la BRVM', key=f'v2865_extract_{ticker}'):
         try:

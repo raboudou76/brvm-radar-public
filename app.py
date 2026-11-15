@@ -226,7 +226,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.8.2 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8.3 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -293,6 +293,16 @@ elif menu=='Valorisation et dividendes':
     if ticker_pg in BRVM_ISSUER_PROFILES and not str(st.session_state.get(profile_key) or '').strip():
         st.session_state[profile_key] = BRVM_ISSUER_PROFILES[ticker_pg]
 
+    # V2.8.8.3 : afficher explicitement la référence active et sa provenance.
+    # L'extraction historique de la fiche reste visible pour l'audit, jamais
+    # une instruction de remplacement du nombre d'actions utilisé.
+    from brvm_sources_v2883 import share_reference, dividend_reference
+    active_share_ref = share_reference(ticker_pg)
+    if active_share_ref:
+        st.info(f"Référence active du capital — {ticker_pg} : {active_share_ref['shares']:,} actions "
+                f"(date de référence : {active_share_ref['as_of']}). "
+                'Une fiche historique peut afficher un autre nombre : elle ne remplace pas la référence active.')
+        st.caption('Justificatif capital : ' + active_share_ref['source'])
     render_annual_valuation(st, ticker_pg)
 
     # Le cours est transféré indépendamment de la confirmation des actions.
@@ -396,6 +406,17 @@ elif menu=='Valorisation et dividendes':
         investor_type = 'physical' if profile == 'Personne physique' else 'legal'
         suggested_rate = rate_for(ticker_pg, investor_type)
         ref_div = reference_for(ticker_pg)
+        official_div_ref = dividend_reference(ticker_pg)
+        if official_div_ref:
+            st.caption(f"BRVM — exercice {official_div_ref['year']} : "
+                       f"{official_div_ref['amount']:g} FCFA/action, "
+                       f"qualification publiée : {official_div_ref['kind']}.")
+            st.link_button('Voir la source BRVM du dividende', official_div_ref['url'])
+        if ticker_pg == 'SMBC':
+            st.warning('Conflit documentaire SMB : la rubrique BRVM indique 800 FCFA NETS '
+                       'pour 2025, alors que le formulaire utilise 800 FCFA BRUTS et '
+                       'calcule 704 FCFA nets. Ne pas présenter le net estimé comme '
+                       'dividende officiel avant rapprochement avec l’avis de paiement.')
         # V2.8.8.2 : Streamlit peut supprimer l'état d'un widget lorsqu'on
         # quitte cette page, tout en conservant notre ancien indicateur div_init.
         # Réamorcer uniquement si la clé du champ n'existe plus. Ne jamais
@@ -438,7 +459,7 @@ elif menu=='Valorisation et dividendes':
             st.caption('Aucun taux automatique validé pour cette catégorie fiscale.')
         source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''),key=valuation_key('financial_source'))
         dividend_source=st.text_input('Source du dividende / avis de paiement',
-            value=(ref_div['source'] if ref_div else ref.get('dividend_source','')),
+            value=(official_div_ref['url'] if official_div_ref and ticker_pg == 'BOAB' else (ref_div['source'] if ref_div else ref.get('dividend_source',''))),
             key=valuation_key('dividend_source'))
     if st.session_state.get(valuation_key('applied')):
         st.caption('Source officielle du cours : ' + st.session_state.get(valuation_key('price_source'),'Non disponible'))

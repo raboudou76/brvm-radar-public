@@ -123,7 +123,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V2.8.8.5 — Data Engine')
+st.sidebar.caption('Investment Intelligence · V2.8.8.7 — Data Engine')
 menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -226,7 +226,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.8.5 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8.7 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -265,6 +265,7 @@ elif menu=='Valorisation et dividendes':
     reference_pg = st.session_state.get('v284_reference') if st.session_state.get('v284_reference_ticker') == ticker_pg else None
     if reference_pg:
         st.success(f"Données annuelles disponibles : {reference_pg['ticker']} — {reference_pg['year']} et {reference_pg['previous_year']}.")
+        st.caption('Qualité des montants : « précision non attestée » signifie que la base ne confirme pas le niveau exact d’arrondi, et non que le montant est nécessairement erroné.')
         for nom, precision in reference_pg['precision'].items():
             if precision == 'ROUNDED_MILLION':
                 st.caption(f'{nom} : arrondi au million FCFA.')
@@ -306,7 +307,7 @@ elif menu=='Valorisation et dividendes':
         st.caption('Justificatif capital : ' + active_share_ref['source'])
     # La fiche émetteur peut être ancienne : son extraction reste consultable,
     # mais ne doit pas apparaître comme une validation obligatoire du capital actif.
-    if ticker_pg == 'BOAB' and active_share_ref:
+    if active_share_ref and ticker_pg in ('BOAB', 'SMBC'):
         with st.expander('Audit : fiche émetteur historique et extraction du marché', expanded=False):
             st.caption('Les demandes de confirmation ci-dessous concernent uniquement la '
                        'référence extraite de la fiche historique, et non le nombre '
@@ -315,20 +316,59 @@ elif menu=='Valorisation et dividendes':
     else:
         render_annual_valuation(st, ticker_pg)
 
-    # Le cours est transféré indépendamment de la confirmation des actions.
-    # L'écriture précède la création des widgets number_input ci-dessous.
+    # V2.8.8.7 : dernier cours officiel positif, isolé par émetteur.
+    # Une extraction absente ou égale à zéro ne doit jamais effacer un cours connu.
+    # Ne pas réécrire le widget à chaque rerun : préserver les corrections manuelles.
+    price_key = valuation_key('price')
+    price_snapshot_key = valuation_key('last_official_price')
     official_market = st.session_state.get(f'v286_price_{ticker_pg}')
-    if isinstance(official_market, dict) and official_market.get('price_xof'):
-        st.session_state[valuation_key('price')] = float(official_market['price_xof'])
-        st.session_state[valuation_key('price_date')] = str(official_market.get('date') or '')
-        st.session_state[valuation_key('price_source')] = str(official_market.get('url') or '')
-        if official_market.get('date'):
+    if isinstance(official_market, dict):
+        try:
+            candidate_price = float(official_market.get('price_xof') or 0)
+        except (ValueError, TypeError):
+            candidate_price = 0.0
+        if candidate_price > 0:
+            candidate_date = str(official_market.get('date') or '')
+            candidate_url = str(official_market.get('url') or '')
+            snapshot = {'price': candidate_price, 'date': candidate_date, 'url': candidate_url}
+            old_snapshot = st.session_state.get(price_snapshot_key)
+            if old_snapshot != snapshot:
+                st.session_state[price_snapshot_key] = snapshot
+                # Appliquer un nouveau cours officiel seulement si le champ n'a
+                # pas été modifié manuellement depuis la précédente référence.
+                previous_auto = st.session_state.get(valuation_key('last_auto_price'))
+                if price_key not in st.session_state or (
+                    previous_auto is not None and st.session_state[price_key] == previous_auto
+                ) or st.session_state.get(price_key) == 0:
+                    st.session_state[price_key] = candidate_price
+                    st.session_state[valuation_key('last_auto_price')] = candidate_price
+                    st.session_state[valuation_key('price_date')] = candidate_date
+                    st.session_state[valuation_key('price_source')] = candidate_url
+                    if candidate_date:
+                        try:
+                            st.session_state[valuation_key('date')] = datetime.fromisoformat(candidate_date).date()
+                        except (ValueError, TypeError):
+                            pass
+    # Restaurer une référence positive après disparition de la clé du widget
+    # (navigation Streamlit), sans transformer un cours ancien en cours actuel.
+    saved_price = st.session_state.get(price_snapshot_key)
+    if price_key not in st.session_state and isinstance(saved_price, dict) and saved_price.get('price', 0) > 0:
+        st.session_state[price_key] = float(saved_price['price'])
+        st.session_state[valuation_key('last_auto_price')] = float(saved_price['price'])
+        st.session_state[valuation_key('price_date')] = saved_price.get('date', '')
+        st.session_state[valuation_key('price_source')] = saved_price.get('url', '')
+        if saved_price.get('date'):
             try:
-                st.session_state[valuation_key('date')] = datetime.fromisoformat(
-                    str(official_market['date'])
-                ).date()
+                st.session_state[valuation_key('date')] = datetime.fromisoformat(saved_price['date']).date()
             except (ValueError, TypeError):
                 pass
+    if isinstance(saved_price, dict) and saved_price.get('price', 0) > 0:
+        st.caption(f"Dernier cours officiel mémorisé pour {ticker_pg} : "
+                   f"{saved_price['price']:,.0f} FCFA — séance {saved_price.get('date') or 'non datée'}. "
+                   "Référence de session, non garantie en temps réel.")
+    elif not st.session_state.get(price_key):
+        st.warning('Aucun cours officiel positif disponible pour cette société dans cette session. '
+                   'Vérifier la cotation BRVM avant tout calcul utilisant le cours.')
 
     # V2.8.8 : snapshot BRVM récent documenté pour BOAB.
     # Ne pas laisser la fiche de 2015 écraser ce nombre plus récent.
@@ -350,10 +390,21 @@ elif menu=='Valorisation et dividendes':
                 'pour audit et ne remplace pas cette référence. '
                 'La synchronisation automatique du capital reste à développer.')
 
+    # V2.8.8.7 : SMB utilise sa référence active documentée, et non une
+    # confirmation de la fiche historique à chaque visite.
+    if ticker_pg == 'SMBC' and active_share_ref:
+        active_key = valuation_key('shares')
+        if active_key not in st.session_state:
+            st.session_state[active_key] = int(active_share_ref['shares'])
+            st.session_state[valuation_key('shares_source')] = str(active_share_ref['source'])
+            st.session_state[valuation_key('applied')] = True
+        st.caption('SMB : référence active préremplie ; vérifier les opérations sur capital '
+                   'postérieures avant une décision d’investissement.')
+
     # Une valeur historique n'alimente le formulaire qu'après vérification
     # explicite des opérations sur capital.
     official_shares = st.session_state.get(f'v286_shares_{ticker_pg}')
-    if (ticker_pg != 'BOAB' and isinstance(official_shares, dict)
+    if (ticker_pg not in ('BOAB', 'SMBC') and isinstance(official_shares, dict)
             and official_shares.get('shares')
             and st.session_state.get(f'v286_confirm_{ticker_pg}')):
         st.session_state[valuation_key('shares')] = int(official_shares['shares'])
@@ -365,7 +416,7 @@ elif menu=='Valorisation et dividendes':
         st.session_state[valuation_key('applied')] = True
     if st.session_state.get(f'v286_shares_{ticker_pg}'):
         item = st.session_state[f'v286_shares_{ticker_pg}']
-        if ticker_pg != 'BOAB':
+        if ticker_pg not in ('BOAB', 'SMBC'):
             st.caption(f"Actions extraites pour {ticker_pg} : {int(item['shares']):,} — référence {item.get('reference_date', 'non précisée')} ; transfert au formulaire soumis à confirmation.")
         else:
             st.caption(f"Fiche historique BOAB (audit uniquement) : {int(item['shares']):,} actions — référence {item.get('reference_date', 'non précisée')} ; sans transfert au formulaire.")
@@ -374,7 +425,7 @@ elif menu=='Valorisation et dividendes':
         st.session_state['v286_apply_pending'] = None
         market = st.session_state.get(f'v286_price_{ticker_pg}')
         shares_data = st.session_state.get(f'v286_shares_{ticker_pg}')
-        if ticker_pg != 'BOAB' and market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
+        if ticker_pg not in ('BOAB', 'SMBC') and market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
             st.session_state[valuation_key('price')] = float(market['price_xof'])
             st.session_state[valuation_key('shares')] = int(shares_data['shares'])
             st.session_state[valuation_key('price_date')] = str(market['date'])
@@ -406,6 +457,8 @@ elif menu=='Valorisation et dividendes':
     a,b=st.columns(2)
     with a:
         price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0,key=valuation_key('price'))
+        if price == 0:
+            st.caption('Cours absent : les ratios dépendant du prix resteront indisponibles.')
         date=st.date_input('Date du cours',value=st.session_state.get(valuation_key('date'), 'today'),key=valuation_key('date')) if price>0 else None
         shares=st.number_input('Nombre d’actions (à vérifier)',min_value=0,value=int(ref.get('shares',0)),step=100,key=valuation_key('shares'),help='0 signifie non renseigné. Ne pas utiliser les actions d’une autre société.')
         ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key=valuation_key('ttm'))
@@ -505,6 +558,7 @@ elif menu=='Valorisation et dividendes':
     checked=st.checkbox('Je confirme les unités, les périodes, les données financières, le nombre d’actions et la fiscalité appliquée.')
     if st.button('Calculer les indicateurs',type='primary'):
         if not checked: st.error('Veuillez confirmer les données avant calcul.')
+        elif price <= 0: st.error('Cours officiel daté requis pour les ratios PER, PBR et rendement.')
         elif shares <= 0: st.error('Nombre d’actions non renseigné pour cette société.')
         elif ttm <= 0: st.error('Renseigne et vérifie un résultat net TTM positif. Le résultat annuel ne remplace pas automatiquement le TTM.')
         elif net is None: st.error('Dividende net non déterminé : calcul des indicateurs suspendu pour éviter un rendement trompeur.')

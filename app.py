@@ -123,7 +123,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V2.8.6.2 — Data Engine')
+st.sidebar.caption('Investment Intelligence · V2.8.8.5 — Data Engine')
 menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -226,7 +226,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.8.4 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8.5 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -304,7 +304,16 @@ elif menu=='Valorisation et dividendes':
                 f"(date de référence : {active_share_ref['as_of']}). "
                 'Une fiche historique peut afficher un autre nombre : elle ne remplace pas la référence active.')
         st.caption('Justificatif capital : ' + active_share_ref['source'])
-    render_annual_valuation(st, ticker_pg)
+    # La fiche émetteur peut être ancienne : son extraction reste consultable,
+    # mais ne doit pas apparaître comme une validation obligatoire du capital actif.
+    if ticker_pg == 'BOAB' and active_share_ref:
+        with st.expander('Audit : fiche émetteur historique et extraction du marché', expanded=False):
+            st.caption('Les demandes de confirmation ci-dessous concernent uniquement la '
+                       'référence extraite de la fiche historique, et non le nombre '
+                       'd’actions actif retenu pour la valorisation.')
+            render_annual_valuation(st, ticker_pg)
+    else:
+        render_annual_valuation(st, ticker_pg)
 
     # Le cours est transféré indépendamment de la confirmation des actions.
     # L'écriture précède la création des widgets number_input ci-dessous.
@@ -326,16 +335,20 @@ elif menu=='Valorisation et dividendes':
     # Ce snapshot devra être remplacé par un connecteur de capitalisations
     # avec vérification quotidienne et journal des opérations sur capital.
     if ticker_pg == 'BOAB':
-        st.session_state[valuation_key('shares')] = 40561048
-        st.session_state[valuation_key('shares_source')] = (
-            'BRVM — capitalisations / avis d’attribution d’actions gratuites 2024 ; '
-            'référence de contrôle 13/11/2026'
-        )
-        st.session_state[valuation_key('applied')] = True
-        st.info('BOAB : 40 561 048 actions (référence BRVM plus récente). '
-                'La fiche émetteur de 2015 affiche 1 007 268 actions et '
-                'ne doit pas remplacer cette référence. '
-                'Actualisation automatisée du capital encore à développer.')
+        # Initialisation une seule fois : une saisie manuelle reste prioritaire
+        # lors des reruns. La référence n'est pas une synchronisation en direct.
+        shares_key = valuation_key('shares')
+        if shares_key not in st.session_state:
+            st.session_state[shares_key] = int(active_share_ref['shares']) if active_share_ref else 40561048
+            st.session_state[valuation_key('shares_source')] = (
+                str(active_share_ref['source']) if active_share_ref else
+                'BRVM — capitalisations / opération sur capital 2024 ; référence de contrôle 13/11/2026'
+            )
+            st.session_state[valuation_key('applied')] = True
+        st.info('BOAB : référence de valorisation 40 561 048 actions. '
+                'La fiche historique au 31/12/2015 (1 007 268 actions) est conservée '
+                'pour audit et ne remplace pas cette référence. '
+                'La synchronisation automatique du capital reste à développer.')
 
     # Une valeur historique n'alimente le formulaire qu'après vérification
     # explicite des opérations sur capital.
@@ -352,7 +365,10 @@ elif menu=='Valorisation et dividendes':
         st.session_state[valuation_key('applied')] = True
     if st.session_state.get(f'v286_shares_{ticker_pg}'):
         item = st.session_state[f'v286_shares_{ticker_pg}']
-        st.caption(f"Actions extraites pour {ticker_pg} : {int(item['shares']):,} — référence {item.get('reference_date', 'non précisée')} ; transfert au formulaire soumis à confirmation.")
+        if ticker_pg != 'BOAB':
+            st.caption(f"Actions extraites pour {ticker_pg} : {int(item['shares']):,} — référence {item.get('reference_date', 'non précisée')} ; transfert au formulaire soumis à confirmation.")
+        else:
+            st.caption(f"Fiche historique BOAB (audit uniquement) : {int(item['shares']):,} actions — référence {item.get('reference_date', 'non précisée')} ; sans transfert au formulaire.")
     # Appliquer les valeurs documentées avant la création des widgets Streamlit.
     if st.session_state.get('v286_apply_pending') == ticker_pg:
         st.session_state['v286_apply_pending'] = None

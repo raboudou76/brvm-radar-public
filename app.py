@@ -226,7 +226,7 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.8.3 — Valorisation, dividendes et fonds propres')
+    st.subheader('V2.8.8.4 — Valorisation, dividendes et fonds propres')
     st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
@@ -297,6 +297,7 @@ elif menu=='Valorisation et dividendes':
     # L'extraction historique de la fiche reste visible pour l'audit, jamais
     # une instruction de remplacement du nombre d'actions utilisé.
     from brvm_sources_v2883 import share_reference, dividend_reference
+    from brvm_sources_v2884 import notice_for, estimate_net_from_notice
     active_share_ref = share_reference(ticker_pg)
     if active_share_ref:
         st.info(f"Référence active du capital — {ticker_pg} : {active_share_ref['shares']:,} actions "
@@ -407,16 +408,20 @@ elif menu=='Valorisation et dividendes':
         suggested_rate = rate_for(ticker_pg, investor_type)
         ref_div = reference_for(ticker_pg)
         official_div_ref = dividend_reference(ticker_pg)
-        if official_div_ref:
-            st.caption(f"BRVM — exercice {official_div_ref['year']} : "
-                       f"{official_div_ref['amount']:g} FCFA/action, "
-                       f"qualification publiée : {official_div_ref['kind']}.")
-            st.link_button('Voir la source BRVM du dividende', official_div_ref['url'])
-        if ticker_pg == 'SMBC':
-            st.warning('Conflit documentaire SMB : la rubrique BRVM indique 800 FCFA NETS '
-                       'pour 2025, alors que le formulaire utilise 800 FCFA BRUTS et '
-                       'calcule 704 FCFA nets. Ne pas présenter le net estimé comme '
-                       'dividende officiel avant rapprochement avec l’avis de paiement.')
+        notice = notice_for(ticker_pg)
+        if notice:
+            kind_label = ('net explicitement annoncé' if notice['amount_kind'] == 'NET_EXPLICIT'
+                          else 'montant annoncé (brut/net non explicitement qualifié)')
+            st.caption(f"Avis {notice['notice_id']} — exercice {notice['fiscal_year']} : "
+                       f"{notice['announced_per_share']:g} FCFA/action — {kind_label}.")
+            st.caption('Source : ' + notice['source_label'])
+            if notice.get('source_url'):
+                st.link_button('Voir la source BRVM du dividende', notice['source_url'])
+            if ticker_pg == 'SMBC':
+                st.info('Avis BRVM n°261-2026 : 800 FCFA/action annoncés ; IRVM 12 % '
+                        '(personnes physiques) ou 10 % (personnes morales). '
+                        'Le net calculé (704 ou 720 FCFA) est une estimation fiscale, '
+                        'et non un montant net explicitement publié par cet avis.')
         # V2.8.8.2 : Streamlit peut supprimer l'état d'un widget lorsqu'on
         # quitte cette page, tout en conservant notre ancien indicateur div_init.
         # Réamorcer uniquement si la clé du champ n'existe plus. Ne jamais
@@ -459,7 +464,7 @@ elif menu=='Valorisation et dividendes':
             st.caption('Aucun taux automatique validé pour cette catégorie fiscale.')
         source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''),key=valuation_key('financial_source'))
         dividend_source=st.text_input('Source du dividende / avis de paiement',
-            value=(official_div_ref['url'] if official_div_ref and ticker_pg == 'BOAB' else (ref_div['source'] if ref_div else ref.get('dividend_source',''))),
+            value=((notice.get('source_url') or notice['source_label']) if notice else (ref_div['source'] if ref_div else ref.get('dividend_source',''))),
             key=valuation_key('dividend_source'))
     if st.session_state.get(valuation_key('applied')):
         st.caption('Source officielle du cours : ' + st.session_state.get(valuation_key('price_source'),'Non disponible'))
@@ -476,7 +481,7 @@ elif menu=='Valorisation et dividendes':
         except Exception as exc: st.error('Historique de dividendes non exploitable : '+str(exc))
     elif is_smb:
         st.info('Historique SMB documenté préchargé ; les montants bruts non vérifiés restent vides.')
-        st.info('SMB 2025 : dividende net de référence pour personne physique = 704 FCFA (confirmé par utilisateur). La BRVM affiche 800 FCFA nets : divergence signalée et conservée.')
+        st.info('SMB 2025 : avis BRVM n°261-2026 annonçant 800 FCFA/action sans qualification explicite brut/net ; net estimé à 704 FCFA pour une personne physique au taux de 12 %.')
         render_dividend_history(smb_dividend_history(), default_tax=tax)
 
     render_live_dividends(key="valuation")

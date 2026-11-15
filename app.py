@@ -16,6 +16,7 @@ from historical_smb import smb_dividend_history
 from investor_indicators import compute_indicators
 from valuation_interpretation import interpret_valuation, DEFAULT_THRESHOLDS
 from financial_prefill import SMB_REFERENCE, extract_equity_from_pdf, net_dividend
+from brvm_irvm_v2881 import rate_for, calculate, reference_for
 from brvm_radar_postgres_v281 import render_page as render_validated_financials
 from brvm_radar_sync_v284 import render_synced_panel, render_valuation_reference, get_valuation_prefill
 from brvm_radar_valuation_v285 import render_annual_valuation
@@ -386,18 +387,59 @@ elif menu=='Valorisation et dividendes':
     with b:
         equity=st.number_input('Capitaux propres dernière clôture (millions FCFA)',value=float(detected['equity_m'] if detected else ref.get('equity_m',0.0)),step=1.0,key=valuation_key('equity'))
         prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA)',value=float(detected['prior_equity_m'] if detected else ref.get('prior_equity_m',0.0)),step=1.0,key=valuation_key('prior_equity'))
-        gross=st.number_input('Dividende brut par action (FCFA)',min_value=0.0,value=float(ref.get('dividend_gross',0.0)),step=10.0,key=valuation_key('gross'))
-        profile=st.selectbox('Profil fiscal',['Personne physique (par défaut)','Autre profil / taux à vérifier'],key=valuation_key('profile'))
-        tax=st.number_input('IRVM applicable (%) — vérifier le régime fiscal',min_value=0.0,max_value=100.0,value=12.0 if is_smb and profile.startswith('Personne physique') else 0.0,step=0.5,key=valuation_key('tax'))
-        net=net_dividend(gross,tax)
-        st.metric('Dividende net par action estimé',f'{net:,.2f} FCFA')
-        if profile.startswith('Autre'): st.warning('Le taux initial de 0 % n’est pas une présomption d’exonération. Renseignez le taux applicable avant utilisation.')
+        # V2.8.8.1 : moteur fiscal isolé, sans modifier les ratios existants.
+        # Le dividende officiel NET est prioritaire et n'est jamais retaxé.
+        profile=st.selectbox(
+            'Qualité fiscale',
+            ['Personne physique', 'Personne morale'],
+            key=valuation_key('profile'))
+        investor_type = 'physical' if profile == 'Personne physique' else 'legal'
+        suggested_rate = rate_for(ticker_pg, investor_type)
+        ref_div = reference_for(ticker_pg)
+        if ref_div and st.session_state.get(valuation_key('div_init')) is None:
+            st.session_state[valuation_key('official_net')] = float(ref_div['net'])
+            st.session_state[valuation_key('div_init')] = True
+        official_net=st.number_input(
+            'Dividende net publié (FCFA/action ; 0 si non disponible)',
+            min_value=0.0, value=0.0, step=1.0,
+            key=valuation_key('official_net'))
+        gross=st.number_input(
+            'Dividende brut par action (FCFA ; 0 si non disponible)',
+            min_value=0.0, value=float(ref.get('dividend_gross',0.0)),
+            step=10.0, key=valuation_key('gross'))
+        # Ne pas écraser une correction manuelle du taux au rerun.
+        rate_key=valuation_key('tax')
+        rate_context_key=valuation_key('tax_context')
+        context=(ticker_pg, investor_type)
+        if st.session_state.get(rate_context_key) != context:
+            st.session_state[rate_key] = float(suggested_rate) if suggested_rate is not None else 0.0
+            st.session_state[rate_context_key] = context
+        tax=st.number_input(
+            'IRVM (%) — taux de travail à vérifier',
+            min_value=0.0,max_value=100.0,step=0.5,key=rate_key)
+        rate_available = suggested_rate is not None
+        if official_net > 0:
+            net = float(official_net)
+            st.success('Dividende net repris tel quel : aucune seconde retenue IRVM.')
+            if ref_div:
+                st.caption(ref_div['source']+' — '+ref_div['status'])
+        elif gross > 0 and rate_available:
+            net = calculate(gross=gross, rate=tax)
+            st.caption('Net estimé depuis le brut, selon le taux IRVM de travail.')
+        else:
+            net = None
+            st.warning('Dividende net indisponible : renseigner un net publié ou un brut avec taux documenté.')
+        st.metric('Dividende net par action',f'{net:,.2f} FCFA' if net is not None else 'N/D')
+        if not rate_available:
+            st.caption('Aucun taux automatique validé pour cette catégorie fiscale.')
         source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''),key=valuation_key('financial_source'))
-        dividend_source=st.text_input('Source du dividende / avis de paiement',value=ref.get('dividend_source',''),key=valuation_key('dividend_source'))
+        dividend_source=st.text_input('Source du dividende / avis de paiement',
+            value=(ref_div['source'] if ref_div else ref.get('dividend_source','')),
+            key=valuation_key('dividend_source'))
     if st.session_state.get(valuation_key('applied')):
         st.caption('Source officielle du cours : ' + st.session_state.get(valuation_key('price_source'),'Non disponible'))
         st.caption('Source officielle du nombre d’actions : ' + st.session_state.get(valuation_key('shares_source'),'Non disponible'))
-    st.caption('Le dividende net est utilisé pour le rendement net ; le dividende brut est utilisé pour le taux de distribution. Le taux IRVM dépend de la qualité et de la résidence fiscale de l’investisseur.')
+    st.caption('Le net publié prime et ne subit aucune seconde retenue. Le brut documenté sert au taux de distribution. La résidence fiscale est hors du calcul standard ; des obligations complémentaires peuvent exister.')
     st.markdown('### Historique des dividendes — cinq ans')
     st.caption('Importer un CSV avec Année et Dividende brut (FCFA/action) ; facultativement Dividende net ou IRVM (%). Aucun historique n’est inventé si les avis de paiement manquent.')
     div_history=st.file_uploader('Historique des dividendes CSV',type=['csv'],key='dividend_history_v173')
@@ -419,6 +461,7 @@ elif menu=='Valorisation et dividendes':
         if not checked: st.error('Veuillez confirmer les données avant calcul.')
         elif shares <= 0: st.error('Nombre d’actions non renseigné pour cette société.')
         elif ttm <= 0: st.error('Renseigne et vérifie un résultat net TTM positif. Le résultat annuel ne remplace pas automatiquement le TTM.')
+        elif net is None: st.error('Dividende net non déterminé : calcul des indicateurs suspendu pour éviter un rendement trompeur.')
         else:
             try:
                 r=compute_indicators(price=price or None,shares=shares,earnings_ttm=ttm*1e6,

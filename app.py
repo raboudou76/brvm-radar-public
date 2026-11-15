@@ -225,17 +225,20 @@ elif menu=='Actualisation T1 / S1 / T3':
     st.warning('La V1.6 ne recalcule pas automatiquement le FCFE/DCF à partir des seuls rapports d’activité : il faut des flux de trésorerie intermédiaires complets et vérifiés.')
 
 elif menu=='Valorisation et dividendes':
-    st.subheader('V2.8.5 — Valorisation, dividendes et fonds propres')
-    st.caption('SMB : capitaux propres préremplis depuis les états financiers 2025. Dividende net affiché par défaut pour une personne physique ; fiscalité ajustable.')
+    st.subheader('V2.8.7.4 — Valorisation, dividendes et fonds propres')
+    st.caption('Références annuelles par société. Les cours et nombres d’actions doivent être vérifiés à leur date de référence.')
     soc=st.text_input('Société / symbole',value='SMB')
     is_smb=soc.strip().upper() in ('SMB','SMBC')
     ref=SMB_REFERENCE if is_smb else {}
     render_valuation_reference(st, 'SMBC' if is_smb else soc.strip().upper())
     ticker_pg = 'SMBC' if is_smb else soc.strip().upper()
+    # V2.8.7.4 : isoler les widgets par émetteur, plutôt que recycler
+    # les mêmes clés Streamlit pour SMBC, BOAB et les autres titres.
+    def valuation_key(field):
+        return f'v2874_{ticker_pg}_{field}'
+
     if st.session_state.get('v286_form_ticker') != ticker_pg:
         st.session_state.pop('v286_apply_pending', None)
-        for k in ('v286_main_price','v286_main_shares','v286_main_date','v286_main_price_date','v286_main_price_source','v286_main_shares_source','v286_main_ticker','v284_ttm','v284_annual','v284_previous','v284_equity','v284_prior_equity','v284_last_prefill'):
-            st.session_state.pop(k, None)
         st.session_state['v286_form_ticker'] = ticker_pg
         st.session_state['v284_last_prefill'] = ''
     st.markdown('### V2.8.4 — Préremplissage contrôlé depuis PostgreSQL')
@@ -252,8 +255,8 @@ elif menu=='Valorisation et dividendes':
             elif precision == 'EXACT_OR_UNSPECIFIED':
                 st.caption(f'{nom} : précision exacte non attestée par les métadonnées.')
         if st.button('Préremplir les champs annuels disponibles', key='v284_appliquer'):
-            mapping = {'annual':'v284_annual','previous':'v284_previous',
-                       'equity':'v284_equity','prior_equity':'v284_prior_equity'}
+            mapping = {'annual':valuation_key('annual'),'previous':valuation_key('previous'),
+                       'equity':valuation_key('equity'),'prior_equity':valuation_key('prior_equity')}
             for src, widget_key in mapping.items():
                 if reference_pg.get(src) is not None:
                     st.session_state[widget_key] = float(reference_pg[src])
@@ -274,11 +277,11 @@ elif menu=='Valorisation et dividendes':
         market = st.session_state.get(f'v286_price_{ticker_pg}')
         shares_data = st.session_state.get(f'v286_shares_{ticker_pg}')
         if market and shares_data and st.session_state.get(f'v286_confirm_{ticker_pg}'):
-            st.session_state['v286_main_price'] = float(market['price_xof'])
-            st.session_state['v286_main_shares'] = int(shares_data['shares'])
-            st.session_state['v286_main_price_date'] = str(market['date'])
-            st.session_state['v286_main_date'] = datetime.fromisoformat(str(market['date'])).date()
-            st.session_state['v286_main_price_source'] = str(market['url'])
+            st.session_state[valuation_key('price')] = float(market['price_xof'])
+            st.session_state[valuation_key('shares')] = int(shares_data['shares'])
+            st.session_state[valuation_key('price_date')] = str(market['date'])
+            st.session_state[valuation_key('date')] = datetime.fromisoformat(str(market['date'])).date()
+            st.session_state[valuation_key('price_source')] = str(market['url'])
             # Une fiche HTML BRVM fournit une date de référence, pas de page PDF.
             # Ne jamais accéder directement à shares_data['pdf_page'].
             shares_url = str(shares_data.get('url') or '')
@@ -288,8 +291,8 @@ elif menu=='Valorisation et dividendes':
                 shares_provenance = f"{shares_url} — référence {shares_data['reference_date']}"
             else:
                 shares_provenance = shares_url + ' — date de référence non précisée'
-            st.session_state['v286_main_shares_source'] = shares_provenance
-            st.session_state['v286_main_ticker'] = ticker_pg
+            st.session_state[valuation_key('shares_source')] = shares_provenance
+            st.session_state[valuation_key('applied')] = True
             st.success('Cours et nombre d’actions reportés dans les champs de valorisation ci-dessous.')
 
     if is_smb:
@@ -304,26 +307,26 @@ elif menu=='Valorisation et dividendes':
         except Exception as exc: st.warning(f'Extraction PDF impossible : {exc}')
     a,b=st.columns(2)
     with a:
-        price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0,key='v286_main_price')
-        date=st.date_input('Date du cours', value=datetime.fromisoformat(st.session_state['v286_main_price_date']).date() if st.session_state.get('v286_main_ticker') == ticker_pg and st.session_state.get('v286_main_price_date') else 'today', key='v286_main_date') if price>0 else None
-        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=0,value=int(ref.get('shares',0)),step=100,key='v286_main_shares',help='0 signifie non renseigné. Ne pas utiliser les actions d’une autre société.')
-        ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key='v284_ttm')
-        annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=float(ref.get('net_income_m',0.0)),step=1.0,key='v284_annual')
-        previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0,key='v284_previous')
+        price=st.number_input('Cours (FCFA)',min_value=0.0,value=0.0,step=50.0,key=valuation_key('price'))
+        date=st.date_input('Date du cours',value=st.session_state.get(valuation_key('date'), 'today'),key=valuation_key('date')) if price>0 else None
+        shares=st.number_input('Nombre d’actions (à vérifier)',min_value=0,value=int(ref.get('shares',0)),step=100,key=valuation_key('shares'),help='0 signifie non renseigné. Ne pas utiliser les actions d’une autre société.')
+        ttm=st.number_input('Résultat net TTM (millions FCFA) — à renseigner séparément',value=0.0,step=1.0,key=valuation_key('ttm'))
+        annual=st.number_input('Résultat net dernier exercice (millions FCFA)',value=float(ref.get('net_income_m',0.0)),step=1.0,key=valuation_key('annual'))
+        previous=st.number_input('Résultat net exercice précédent (millions FCFA ; 0 si absent)',value=8698.0 if is_smb else 0.0,step=1.0,key=valuation_key('previous'))
     with b:
-        equity=st.number_input('Capitaux propres dernière clôture (millions FCFA)',value=float(detected['equity_m'] if detected else ref.get('equity_m',0.0)),step=1.0,key='v284_equity')
-        prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA)',value=float(detected['prior_equity_m'] if detected else ref.get('prior_equity_m',0.0)),step=1.0,key='v284_prior_equity')
-        gross=st.number_input('Dividende brut par action (FCFA)',min_value=0.0,value=ref.get('dividend_gross',0.0),step=10.0)
-        profile=st.selectbox('Profil fiscal',['Personne physique (par défaut)','Autre profil / taux à vérifier'])
-        tax=st.number_input('IRVM applicable (%) — vérifier le régime fiscal',min_value=0.0,max_value=100.0,value=12.0 if is_smb and profile.startswith('Personne physique') else 0.0,step=0.5)
+        equity=st.number_input('Capitaux propres dernière clôture (millions FCFA)',value=float(detected['equity_m'] if detected else ref.get('equity_m',0.0)),step=1.0,key=valuation_key('equity'))
+        prior_equity=st.number_input('Capitaux propres clôture précédente (millions FCFA)',value=float(detected['prior_equity_m'] if detected else ref.get('prior_equity_m',0.0)),step=1.0,key=valuation_key('prior_equity'))
+        gross=st.number_input('Dividende brut par action (FCFA)',min_value=0.0,value=float(ref.get('dividend_gross',0.0)),step=10.0,key=valuation_key('gross'))
+        profile=st.selectbox('Profil fiscal',['Personne physique (par défaut)','Autre profil / taux à vérifier'],key=valuation_key('profile'))
+        tax=st.number_input('IRVM applicable (%) — vérifier le régime fiscal',min_value=0.0,max_value=100.0,value=12.0 if is_smb and profile.startswith('Personne physique') else 0.0,step=0.5,key=valuation_key('tax'))
         net=net_dividend(gross,tax)
         st.metric('Dividende net par action estimé',f'{net:,.2f} FCFA')
         if profile.startswith('Autre'): st.warning('Le taux initial de 0 % n’est pas une présomption d’exonération. Renseignez le taux applicable avant utilisation.')
-        source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''))
-        dividend_source=st.text_input('Source du dividende / avis de paiement',value=ref.get('dividend_source',''))
-    if st.session_state.get('v286_main_ticker') == ticker_pg:
-        st.caption('Source officielle du cours : ' + st.session_state.get('v286_main_price_source','Non disponible'))
-        st.caption('Source officielle du nombre d’actions : ' + st.session_state.get('v286_main_shares_source','Non disponible'))
+        source=st.text_input('Source du rapport financier',value=ref.get('financial_source',''),key=valuation_key('financial_source'))
+        dividend_source=st.text_input('Source du dividende / avis de paiement',value=ref.get('dividend_source',''),key=valuation_key('dividend_source'))
+    if st.session_state.get(valuation_key('applied')):
+        st.caption('Source officielle du cours : ' + st.session_state.get(valuation_key('price_source'),'Non disponible'))
+        st.caption('Source officielle du nombre d’actions : ' + st.session_state.get(valuation_key('shares_source'),'Non disponible'))
     st.caption('Le dividende net est utilisé pour le rendement net ; le dividende brut est utilisé pour le taux de distribution. Le taux IRVM dépend de la qualité et de la résidence fiscale de l’investisseur.')
     st.markdown('### Historique des dividendes — cinq ans')
     st.caption('Importer un CSV avec Année et Dividende brut (FCFA/action) ; facultativement Dividende net ou IRVM (%). Aucun historique n’est inventé si les avis de paiement manquent.')

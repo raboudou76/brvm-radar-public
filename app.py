@@ -123,7 +123,7 @@ def score_session(df):
     return out.sort_values('Signal séance /100',ascending=False)
 
 st.sidebar.title('◈ BRVM RADAR')
-st.sidebar.caption('Investment Intelligence · V2.8.8.7 — Data Engine')
+st.sidebar.caption('Investment Intelligence · V2.8.8.8 — Data Engine')
 menu=st.sidebar.radio('Navigation',['Données validées (PostgreSQL)','Dashboard financier','Vue du marché','Radar court terme','Fiche action','Analyse fondamentale','Actualisation T1 / S1 / T3','Valorisation et dividendes','Valeur intrinsèque','Publications financières','Analyser un PDF','Portefeuille','Méthodologie','Informations légales'])
 st.sidebar.link_button('Site officiel BRVM',BASE)
 st.sidebar.caption('Bêta publique · Aucun compte ni ordre de bourse')
@@ -321,6 +321,21 @@ elif menu=='Valorisation et dividendes':
     # Ne pas réécrire le widget à chaque rerun : préserver les corrections manuelles.
     price_key = valuation_key('price')
     price_snapshot_key = valuation_key('last_official_price')
+    # V2.8.8.8 : la navigation ne doit pas exiger un clic manuel dans
+    # l'audit pour initialiser le cours. Charger le BOC officiel à l'entrée
+    # sur un émetteur, puis conserver la référence par société.
+    # Une extraction échouée ne doit jamais effacer une référence positive.
+    if company_changed and ticker_pg in ('SMBC', 'BOAB'):
+        try:
+            from brvm_market_v286 import get_official_market_price
+            with st.spinner(f'Lecture du dernier BOC officiel pour {ticker_pg}…'):
+                fresh_market = get_official_market_price(ticker_pg)
+            if float(fresh_market.get('price_xof') or 0) > 0:
+                st.session_state[f'v286_price_{ticker_pg}'] = fresh_market
+        except Exception as exc:
+            st.caption(f'BOC {ticker_pg} non récupéré automatiquement : {exc}. '
+                       'Le dernier cours mémorisé reste prioritaire.')
+
     official_market = st.session_state.get(f'v286_price_{ticker_pg}')
     if isinstance(official_market, dict):
         try:
